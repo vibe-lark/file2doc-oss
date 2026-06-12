@@ -1,0 +1,3 @@
+# Result package contract
+
+File2Doc parse jobs produce result packages rather than single JSON responses. Each package contains content markdown, a versioned manifest, media artifacts, and indexes for pages, tables, frames, OCR layers, transcripts, warnings, and derived assets; markdown refers to media by stable media references instead of file paths. Derived assets create manifest revisions while the latest manifest remains directly readable, so downstream agents can consume a simple current view while the service preserves enough history to debug which assets were available at a given point.

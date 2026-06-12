@@ -1,0 +1,44 @@
+# Kubernetes Deployment Template
+
+This directory contains generic Kubernetes templates for a Linux/amd64 CPU-only
+File2Doc deployment.
+
+The manifests in `deploy/k8s/file2doc.yaml` are templates. Replace placeholder
+values before applying them to a cluster:
+
+- `image: file2doc:replace-me` must be set to the image tag produced by the
+  deployment build.
+- `FILE2DOC_BEARER_TOKEN: replace-me` must be replaced with an environment
+  specific bearer token before use.
+- PVC sizing and `storageClassName` can be adjusted for the target cluster.
+
+## Runtime Shape
+
+The deployment runs one `file2doc` container with:
+
+- `uvicorn file2doc.main:app --host 0.0.0.0 --port 8000`
+- `FILE2DOC_STORAGE_ROOT=/data/file2doc`
+- `FILE2DOC_MAX_CONCURRENT_JOBS=2`
+- `FILE2DOC_OCR_TIMEOUT_SECONDS=300`
+- `FILE2DOC_BEARER_TOKEN` loaded from the `file2doc-secret` Kubernetes Secret
+- a PVC named `file2doc-data` mounted at `/data/file2doc`
+- HTTP readiness and liveness probes for `/readyz` and `/healthz`
+- pod `securityContext` sets UID/GID/fsGroup `1000` so the non-root container user can write PVC data
+- deployment strategy is `Recreate` because a single ReadWriteOnce EBS volume cannot be mounted by old and new VCI Pods at the same time
+- CPU and memory requests/limits only; no GPU resources
+
+Upload requests only store the source file and enqueue the parse job. Parsing
+runs in background workers inside the Pod, and callers retrieve final output by
+polling the job endpoint and then downloading manifest/artifact URLs.
+
+Remote OCR configuration is intentionally not included here. Keep OCR endpoint
+URLs, model identifiers, and API keys in a separate explicit configuration path
+when that deployment capability is enabled.
+
+## Apply
+
+Review and edit the placeholders first, then apply:
+
+```sh
+kubectl apply -f deploy/k8s/file2doc.yaml
+```

@@ -1,0 +1,32 @@
+# Local data and generated output
+.data/
+.scratch/
+dist/
+build/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.worktrees/
+
+# Local sample attachments used for parser validation
+*.pdf
+*.ppt
+*.pptx
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.mp3
+*.mp4
+*.mov
+*.wav
+
+# Local reference clone, not part of this repository
+upstream-attachment-to-doc-local/
+
+# Secrets and environment
+.env
+.env.*
+!.env.example

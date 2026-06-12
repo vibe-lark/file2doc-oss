@@ -1,0 +1,3 @@
+# File parsing service boundary
+
+File2Doc v1 is an offline file parsing service, not a Lark cloud document publishing service. It exposes an HTTP job model with CLI access, accepts uploaded file streams or service-accessible local paths, and produces versioned result packages containing content markdown, manifests, media indexes, thumbnails, OCR layers, transcripts, progress events, warnings, and derived assets. Lark URL parsing, remote document fetching, and creation or update of Lark cloud documents remain responsibilities of upstream or downstream agents so the parsing service stays focused, offline-first, and reusable.

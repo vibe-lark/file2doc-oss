@@ -1,0 +1,162 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: file2doc
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: file2doc-secret
+  namespace: file2doc
+type: Opaque
+stringData:
+  FILE2DOC_BEARER_TOKEN: replace-me
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: file2doc-data
+  namespace: file2doc
+spec:
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: file2doc
+  namespace: file2doc
+  labels:
+    app.kubernetes.io/name: file2doc
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: file2doc
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: file2doc
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: amd64
+      securityContext:
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      initContainers:
+        - name: init-storage-permissions
+          image: file2doc:replace-me
+          command:
+            - sh
+            - -c
+            - mkdir -p /data/file2doc && chown -R 1000:1000 /data/file2doc
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: file2doc-data
+              mountPath: /data/file2doc
+      containers:
+        - name: file2doc
+          image: file2doc:replace-me
+          imagePullPolicy: IfNotPresent
+          command:
+            - uvicorn
+          args:
+            - file2doc.main:app
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8000"
+            - --loop
+            - asyncio
+            - --http
+            - h11
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: FILE2DOC_STORAGE_ROOT
+              value: /data/file2doc
+            - name: FILE2DOC_MAX_CONCURRENT_JOBS
+              value: "2"
+            - name: FILE2DOC_OCR_TIMEOUT_SECONDS
+              value: "300"
+            - name: FILE2DOC_LOCAL_ASR_MODEL_DIR
+              value: /data/file2doc/models/sherpa-paraformer-zh
+            - name: FILE2DOC_OCR_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: file2doc-secret
+                  key: FILE2DOC_OCR_MODEL
+                  optional: true
+            - name: FILE2DOC_OCR_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: file2doc-secret
+                  key: FILE2DOC_OCR_API_KEY
+                  optional: true
+            - name: FILE2DOC_OCR_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: file2doc-secret
+                  key: FILE2DOC_OCR_BASE_URL
+                  optional: true
+            - name: FILE2DOC_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: file2doc-secret
+                  key: FILE2DOC_BEARER_TOKEN
+          volumeMounts:
+            - name: file2doc-data
+              mountPath: /data/file2doc
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+      volumes:
+        - name: file2doc-data
+          persistentVolumeClaim:
+            claimName: file2doc-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: file2doc
+  namespace: file2doc
+  labels:
+    app.kubernetes.io/name: file2doc
+spec:
+  selector:
+    app.kubernetes.io/name: file2doc
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
