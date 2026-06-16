@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import base64
 import io
 from importlib.metadata import PackageNotFoundError, version
@@ -18,6 +18,7 @@ from markitdown import MarkItDown
 class ParsedContent:
     markdown: str
     diagnostics: dict
+    warnings: list[dict] = field(default_factory=list)
 
 
 class ParseFailure(Exception):
@@ -28,12 +29,14 @@ class ParseFailure(Exception):
 
 MarkItDownFactory = Callable[[], Any]
 OcrRunner = Callable[[Path, "ParseOptions"], str]
+ImageRunner = Callable[[Path, "ParseOptions"], str]
 
 
 @dataclass(frozen=True)
 class ParseOptions:
     markitdown_factory: MarkItDownFactory = lambda: MarkItDown(enable_plugins=False)
     ocr_runner: OcrRunner | None = None
+    image_runner: ImageRunner | None = None
     ocr_model: str | None = None
     ocr_api_key: str | None = None
     ocr_base_url: str | None = None
@@ -66,6 +69,22 @@ class ParseOptions:
 
         return _run_direct_pdf_vision_ocr_with_timeout(source_path, self)
 
+    @property
+    def image_vision_configured(self) -> bool:
+        return self.image_runner is not None or bool(self.ocr_model and self.ocr_api_key)
+
+    def run_image_vision(self, source_path: Path) -> str:
+        if self.image_runner is not None:
+            return self.image_runner(source_path, self)
+
+        if not self.ocr_model or not self.ocr_api_key:
+            raise ParseFailure(
+                "image_vision_not_configured",
+                "Image parsing requires a configured OpenAI-compatible vision endpoint",
+            )
+
+        return _run_direct_image_vision_with_timeout(source_path, self)
+
 
 def parse_content_markdown(
     source_path: Path,
@@ -85,6 +104,9 @@ def parse_content_markdown(
                 elapsed_ms=_elapsed_ms(started_at),
             ),
         )
+
+    if _is_image(content_type):
+        return _parse_image_with_vision(source_path, content_type, parse_options, started_at)
 
     try:
         result = parse_options.markitdown_factory().convert(source_path)
@@ -134,6 +156,43 @@ def _parse_pdf_with_ocr(
             ocr_used=True,
             remote_services_used=True,
         ),
+    )
+
+
+def _parse_image_with_vision(
+    source_path: Path,
+    content_type: str,
+    options: ParseOptions,
+    started_at: float,
+) -> ParsedContent:
+    if not options.image_vision_configured:
+        raise ParseFailure(
+            "image_vision_not_configured",
+            "Image parsing requires a configured OpenAI-compatible vision endpoint",
+        )
+
+    try:
+        content = options.run_image_vision(source_path).strip()
+    except ParseFailure:
+        raise
+    except Exception as error:  # pragma: no cover - exact remote client errors vary.
+        raise ParseFailure("image_vision_failed", f"Image vision parsing failed: {error}") from error
+
+    if not content:
+        raise ParseFailure("empty_parse_result", "Image vision parsing produced no usable Markdown")
+
+    markdown = _normalize_image_markdown(content)
+    return ParsedContent(
+        markdown=markdown + "\n",
+        diagnostics=_diagnostics(
+            name="image-vision",
+            version=_package_version("openai"),
+            elapsed_ms=_elapsed_ms(started_at),
+            ocr_used=True,
+            remote_services_used=True,
+            source_media_type=content_type.split(";", 1)[0].strip().lower(),
+        ),
+        warnings=_warnings_from_markdown(markdown),
     )
 
 
@@ -231,10 +290,26 @@ def _run_direct_pdf_vision_ocr_with_timeout(
     )
 
 
+def _run_direct_image_vision_with_timeout(
+    source_path: Path,
+    options: ParseOptions,
+) -> str:
+    return _run_ocr_process_with_timeout(
+        source_path,
+        options,
+        _run_direct_image_vision_worker,
+        failure_code="image_vision_failed",
+        failure_label="Image vision parsing",
+    )
+
+
 def _run_ocr_process_with_timeout(
     source_path: Path,
     options: ParseOptions,
     target: Callable[[Path, ParseOptions, multiprocessing.Queue], None],
+    *,
+    failure_code: str = "remote_ocr_failed",
+    failure_label: str = "OCR recovery",
 ) -> str:
     timeout = options.ocr_timeout_seconds
     result_queue: multiprocessing.Queue = multiprocessing.Queue(maxsize=1)
@@ -252,16 +327,16 @@ def _run_ocr_process_with_timeout(
             process.kill()
             process.join(5)
         raise ParseFailure(
-            "remote_ocr_failed",
-            f"OCR recovery timed out after {timeout:g} seconds",
+            failure_code,
+            f"{failure_label} timed out after {timeout:g} seconds",
         )
 
     try:
         result = result_queue.get_nowait()
     except queue.Empty as error:
         raise ParseFailure(
-            "remote_ocr_failed",
-            f"OCR recovery process exited with code {process.exitcode}",
+            failure_code,
+            f"{failure_label} process exited with code {process.exitcode}",
         ) from error
 
     if result["ok"]:
@@ -287,6 +362,27 @@ def _run_direct_pdf_vision_ocr_worker(
                 "ok": False,
                 "code": "remote_ocr_failed",
                 "message": f"OCR recovery failed: {error}",
+            }
+        )
+
+
+def _run_direct_image_vision_worker(
+    source_path: Path,
+    options: ParseOptions,
+    result_queue: multiprocessing.Queue,
+) -> None:
+    try:
+        result_queue.put(
+            {"ok": True, "text": _run_direct_image_vision(source_path, options)}
+        )
+    except ParseFailure as error:
+        result_queue.put({"ok": False, "code": error.code, "message": str(error)})
+    except Exception as error:  # pragma: no cover - exact dependency failures vary.
+        result_queue.put(
+            {
+                "ok": False,
+                "code": "image_vision_failed",
+                "message": f"Image vision parsing failed: {error}",
             }
         )
 
@@ -337,6 +433,59 @@ def _run_direct_pdf_vision_ocr(source_path: Path, options: ParseOptions) -> str:
     return "\n\n".join(page_texts).strip()
 
 
+def _run_direct_image_vision(source_path: Path, options: ParseOptions) -> str:
+    try:
+        from openai import OpenAI
+    except ImportError as error:  # pragma: no cover - depends on deployment extras.
+        raise ParseFailure(
+            "image_vision_failed",
+            "Image parsing is configured but the openai package is not installed",
+        ) from error
+
+    if not options.ocr_model or not options.ocr_api_key:
+        raise ParseFailure(
+            "image_vision_not_configured",
+            "Image parsing requires a configured OpenAI-compatible vision endpoint",
+        )
+
+    client_kwargs = {
+        "api_key": options.ocr_api_key,
+        "timeout": options.ocr_timeout_seconds,
+    }
+    if options.ocr_base_url:
+        client_kwargs["base_url"] = options.ocr_base_url
+    client = OpenAI(**client_kwargs)
+
+    media_type = _image_media_type_from_path(source_path)
+    encoded = base64.b64encode(source_path.read_bytes()).decode("utf-8")
+    response = client.chat.completions.create(
+        model=options.ocr_model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Parse this image into generic Markdown for downstream agents. "
+                            "Return Markdown only with these sections: "
+                            "Visible Text, Candidate Numeric Values, Layout, Warnings. "
+                            "Do not return domain-specific JSON. Use 'None.' in Warnings "
+                            "when no material warning is present."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{media_type};base64,{encoded}"},
+                    },
+                ],
+            }
+        ],
+        max_tokens=2000,
+    )
+    return response.choices[0].message.content or ""
+
+
 def _extract_page_text_with_vision(client: Any, *, model: str, encoded_png: str) -> str:
     response = client.chat.completions.create(
         model=model,
@@ -370,14 +519,17 @@ def _diagnostics(
     elapsed_ms: float,
     ocr_used: bool = False,
     remote_services_used: bool = False,
+    **extra: Any,
 ) -> dict:
-    return {
+    diagnostics = {
         "name": name,
         "version": version,
         "elapsed_ms": elapsed_ms,
         "ocr_used": ocr_used,
         "remote_services_used": remote_services_used,
     }
+    diagnostics.update(extra)
+    return diagnostics
 
 
 def _elapsed_ms(started_at: float) -> float:
@@ -393,6 +545,75 @@ def _package_version(package_name: str) -> str | None:
 
 def _is_pdf(content_type: str) -> bool:
     return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
+
+
+def _is_image(content_type: str) -> bool:
+    return content_type.split(";", 1)[0].strip().lower() in {
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+    }
+
+
+def _image_media_type_from_path(source_path: Path) -> str:
+    return "image/png" if source_path.suffix.lower() == ".png" else "image/jpeg"
+
+
+def _warnings_from_markdown(markdown: str) -> list[dict]:
+    lines = markdown.splitlines()
+    warning_lines: list[str] = []
+    in_warnings = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.lower() == "## warnings":
+            in_warnings = True
+            continue
+        if in_warnings and stripped.startswith("## "):
+            break
+        if in_warnings and stripped:
+            warning_lines.append(stripped.lstrip("-* ").strip())
+
+    if not warning_lines:
+        return []
+
+    message = " ".join(warning_lines).strip()
+    if message.lower().rstrip(".") in {"none", "no warnings", "none detected"}:
+        return []
+
+    return [{"code": "image_parse_warning", "message": message}]
+
+
+def _normalize_image_markdown(markdown: str) -> str:
+    required_headings = (
+        "## Visible Text",
+        "## Candidate Numeric Values",
+        "## Layout",
+        "## Warnings",
+    )
+    if all(heading.lower() in markdown.lower() for heading in required_headings):
+        return markdown.rstrip()
+
+    return "\n".join(
+        [
+            "# Image Analysis",
+            "",
+            "## Visible Text",
+            "",
+            markdown.strip(),
+            "",
+            "## Candidate Numeric Values",
+            "",
+            "None.",
+            "",
+            "## Layout",
+            "",
+            "Not described.",
+            "",
+            "## Warnings",
+            "",
+            "None.",
+        ]
+    )
 
 
 def _env_float(name: str, default: float) -> float:

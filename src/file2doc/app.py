@@ -10,6 +10,7 @@ from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, U
 from fastapi.responses import FileResponse, JSONResponse
 
 from file2doc.audio import AudioParseOptions
+from file2doc.parsers import ParseOptions
 from file2doc.rendering import AGENT_PAGE_IMAGE_DPI, ALLOWED_PAGE_IMAGE_DPI
 from file2doc.store import JobStore
 
@@ -20,12 +21,14 @@ def create_app(
     auth_enabled: bool = True,
     bearer_token: str | None = None,
     audio_parse_options: AudioParseOptions | None = None,
+    parse_options: ParseOptions | None = None,
     video_frame_extractor=None,
 ) -> FastAPI:
     root = Path(storage_root)
     store = JobStore(
         root,
         audio_parse_options=audio_parse_options,
+        parse_options=parse_options,
         video_frame_extractor=video_frame_extractor,
     )
     app = FastAPI(title="File2Doc", version="0.1.0")
@@ -69,7 +72,7 @@ def create_app(
     async def capabilities() -> dict:
         asr_model_dir = _configured_asr_model_dir(audio_parse_options)
         response = {
-            "supported_source_groups": ["pdf", "office", "text", "audio", "video"],
+            "supported_source_groups": ["pdf", "office", "text", "audio", "video", "image"],
             "auth_required": auth_enabled,
             "storage_root": str(root),
             "local_asr_configured": asr_model_dir is not None,

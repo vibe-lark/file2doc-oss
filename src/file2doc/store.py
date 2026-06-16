@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from file2doc.audio import AudioParseFailure, AudioParseOptions, parse_audio_transcript
-from file2doc.parsers import ParseFailure, parse_content_markdown
+from file2doc.parsers import ParseFailure, ParseOptions, parse_content_markdown
 from file2doc.rendering import (
     AGENT_PAGE_IMAGE_DPI,
     AGENT_THUMBNAIL_MAX_EDGE,
@@ -35,10 +35,12 @@ class JobStore:
         storage_root: Path,
         *,
         audio_parse_options: AudioParseOptions | None = None,
+        parse_options: ParseOptions | None = None,
         video_frame_extractor: VideoFrameExtractor | None = None,
     ) -> None:
         self.storage_root = storage_root
         self.audio_parse_options = audio_parse_options
+        self.parse_options = parse_options
         self.video_frame_extractor = video_frame_extractor or extract_video_frames
         self.jobs_root = storage_root / "jobs"
         self.jobs_root.mkdir(parents=True, exist_ok=True)
@@ -117,7 +119,10 @@ class JobStore:
 
         self._append_event(job_id, "parser_started", 30, "Parser started")
         try:
-            parsed = parse_content_markdown(source_path, content_type)
+            if self.parse_options is None:
+                parsed = parse_content_markdown(source_path, content_type)
+            else:
+                parsed = parse_content_markdown(source_path, content_type, self.parse_options)
         except ParseFailure as error:
             self._fail_job(job, error.code, str(error))
             return
@@ -136,6 +141,15 @@ class JobStore:
         }
         page_index: list[dict] = []
         media_index: list[dict] = []
+        if _is_image_source(source_path, job["source"]["content_type"]):
+            image_media, image_artifact = _copy_source_image_artifact(
+                source_path,
+                result_root,
+                artifact_id=_id("art"),
+                content_type=job["source"]["content_type"],
+            )
+            media_index.append(image_media)
+            artifacts[image_artifact["artifact_id"]] = image_artifact
         if is_pdf_source(source_path, job["source"]["content_type"]):
             page_index, media_index, visual_artifacts = render_pdf_visual_assets(
                 source_path,
@@ -162,32 +176,14 @@ class JobStore:
             "page_index": page_index,
             "media_index": media_index,
             "artifacts": list(artifacts.values()),
-            "warnings": [],
+            "warnings": parsed.warnings,
             "created_at": _iso(_now()),
             "expires_at": job["expires_at"],
         }
         self._write_json(result_root / "manifest.json", manifest)
         self._write_json(result_root / "artifacts.json", artifacts)
 
-        job["status"] = "completed"
-        job["stage"] = "completed"
-        job["percent"] = 100
-        job["latest_progress"] = {
-            "stage": "completed",
-            "percent": 100,
-            "message": "Result package assembled",
-            "detail": {},
-            "created_at": _iso(_now()),
-        }
-        job["result"] = {
-            "manifest_url": f"/parse-jobs/{job_id}/result",
-            "package_url": f"/parse-jobs/{job_id}/package",
-            "content_artifact_id": content_artifact_id,
-            "content_url": f"/parse-jobs/{job_id}/artifacts/{content_artifact_id}",
-        }
-        self._persist_job(job)
-        self._write_json(job_root / "job.json", job)
-        self._append_event(job_id, "completed", 100, "Result package assembled")
+        self._complete_job_record(job, content_artifact_id, warnings=parsed.warnings)
 
     def _complete_audio_job(self, job: dict, source_path: Path, result_root: Path) -> None:
         self._append_event(job["job_id"], "asr_running", 30, "ASR transcription running")
@@ -344,15 +340,24 @@ class JobStore:
         }
         self._write_json(result_root / "manifest.json", manifest)
         self._write_json(result_root / "artifacts.json", all_artifacts)
-        self._complete_job_record(job, content_artifact_id)
+        self._complete_job_record(job, content_artifact_id, warnings=warnings)
 
-    def _complete_job_record(self, job: dict, content_artifact_id: str) -> None:
+    def _complete_job_record(
+        self,
+        job: dict,
+        content_artifact_id: str,
+        *,
+        warnings: list[dict] | None = None,
+    ) -> None:
         job_id = job["job_id"]
-        job["status"] = "completed"
-        job["stage"] = "completed"
+        warnings = warnings or []
+        final_stage = "completed_with_warnings" if warnings else "completed"
+        job["status"] = final_stage
+        job["stage"] = final_stage
         job["percent"] = 100
+        job["warnings_count"] = len(warnings)
         job["latest_progress"] = {
-            "stage": "completed",
+            "stage": final_stage,
             "percent": 100,
             "message": "Result package assembled",
             "detail": {},
@@ -366,7 +371,7 @@ class JobStore:
         }
         self._persist_job(job)
         self._write_json(self._job_root(job_id) / "job.json", job)
-        self._append_event(job_id, "completed", 100, "Result package assembled")
+        self._append_event(job_id, final_stage, 100, "Result package assembled")
 
     def _fail_job(self, job: dict, code: str, message: str) -> None:
         job["status"] = "failed"
@@ -789,6 +794,50 @@ def _is_video_source(source_path: Path, content_type: str) -> bool:
         ".webm",
         ".wmv",
     }
+
+
+def _is_image_source(source_path: Path, content_type: str) -> bool:
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    return media_type in {"image/png", "image/jpeg", "image/jpg"} or source_path.suffix.lower() in {
+        ".jpg",
+        ".jpeg",
+        ".png",
+    }
+
+
+def _copy_source_image_artifact(
+    source_path: Path,
+    result_root: Path,
+    *,
+    artifact_id: str,
+    content_type: str,
+) -> tuple[dict, dict]:
+    media_type = _image_media_type(source_path, content_type)
+    image_path = result_root / "images" / f"source{source_path.suffix.lower() or '.image'}"
+    image_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source_path, image_path)
+    package_path = image_path.relative_to(result_root).as_posix()
+    media = {
+        "id": "source-image",
+        "kind": "source_image",
+        "artifact_id": artifact_id,
+        "path": package_path,
+        "media_type": media_type,
+    }
+    artifact = {
+        "artifact_id": artifact_id,
+        "kind": "source_image",
+        "path": package_path,
+        "media_type": media_type,
+    }
+    return media, artifact
+
+
+def _image_media_type(source_path: Path, content_type: str) -> str:
+    media_type = content_type.split(";", 1)[0].strip().lower()
+    if media_type in {"image/png", "image/jpeg", "image/jpg"}:
+        return "image/jpeg" if media_type == "image/jpg" else media_type
+    return "image/png" if source_path.suffix.lower() == ".png" else "image/jpeg"
 
 
 def _transcript_markdown(text: str) -> str:

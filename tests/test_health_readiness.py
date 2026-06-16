@@ -27,7 +27,7 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
 
     assert response.status_code == 200
     assert response.json() == {
-        "supported_source_groups": ["pdf", "office", "text", "audio", "video"],
+        "supported_source_groups": ["pdf", "office", "text", "audio", "video", "image"],
         "auth_required": True,
         "storage_root": str(tmp_path / "storage"),
         "local_asr_configured": True,
