@@ -4,6 +4,8 @@ import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
+import base64
+import time
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -89,6 +91,209 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     )
     assert source_artifact.content == image_bytes
     assert source_artifact.headers["content-type"] == expected_media_type
+
+
+def test_zoom_result_is_exposed_as_short_lived_diagnostic_artifact(tmp_path):
+    image_bytes = _png_bytes()
+    zoom_bytes = _image_bytes("PNG")
+    visual_client = _VisualClientWithImageProcessArtifact(
+        payload={
+            "description": "A zoomed laboratory display.",
+            "visibleText": ["H 88.52"],
+            "candidateNumericValues": ["88.52"],
+            "layout": "One illuminated display.",
+            "imageProcessActions": ["Zoom"],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        },
+        action="zoom",
+        result_bytes=zoom_bytes,
+    )
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+                visual_artifact_ttl_seconds=3600,
+            ),
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("display.png", image_bytes, "image/png")},
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "completed"
+    manifest = client.get(job["result"]["manifest_url"]).json()
+    zoom_media = next(
+        item
+        for item in manifest["media_index"]
+        if item["kind"] == "image_process_zoom_result"
+    )
+    assert zoom_media["source_ref"].startswith("source_image_sha256:")
+    assert zoom_media["lifecycle"] == "structured_workflow_draft"
+    assert zoom_media["attachment_role"] == "diagnostic_only"
+    assert zoom_media["expires_at"] < manifest["expires_at"]
+
+    response = client.get(
+        f"/parse-jobs/{job['job_id']}/artifacts/{zoom_media['artifact_id']}"
+    )
+    assert response.status_code == 200
+    assert response.content == zoom_bytes
+    assert response.headers["content-type"] == "image/png"
+
+    content = client.get(job["result"]["content_url"]).text
+    assert zoom_media["path"] not in content
+
+
+def test_releasing_diagnostics_shortens_only_derived_artifact_lifetime(tmp_path):
+    visual_client = _VisualClientWithImageProcessArtifact(
+        payload={
+            "description": "A zoomed label.",
+            "visibleText": ["42"],
+            "candidateNumericValues": ["42"],
+            "layout": "Centered.",
+            "imageProcessActions": ["Zoom"],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        },
+        action="zoom",
+        result_bytes=_png_bytes(),
+    )
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+                visual_artifact_ttl_seconds=3600,
+                visual_artifact_release_grace_seconds=60,
+            ),
+        )
+    )
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("label.png", _png_bytes(), "image/png")},
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+    before = client.get(job["result"]["manifest_url"]).json()
+    diagnostic_before = next(
+        item
+        for item in before["media_index"]
+        if item["kind"] == "image_process_zoom_result"
+    )
+    source_before = next(
+        item for item in before["media_index"] if item["kind"] == "source_image"
+    )
+
+    first = client.post(
+        f"/parse-jobs/{job['job_id']}/diagnostics/release"
+    )
+    second = client.post(
+        f"/parse-jobs/{job['job_id']}/diagnostics/release"
+    )
+
+    assert first.status_code == 200
+    assert first.json() == {
+        "job_id": job["job_id"],
+        "released_count": 1,
+        "artifact_ids": [diagnostic_before["artifact_id"]],
+        "release_expires_at": first.json()["release_expires_at"],
+        "already_released": False,
+    }
+    assert first.json()["release_expires_at"] < diagnostic_before["expires_at"]
+    assert second.json()["already_released"] is True
+    assert second.json()["release_expires_at"] == first.json()["release_expires_at"]
+
+    after = client.get(job["result"]["manifest_url"]).json()
+    diagnostic_after = next(
+        item
+        for item in after["media_index"]
+        if item["artifact_id"] == diagnostic_before["artifact_id"]
+    )
+    source_after = next(
+        item for item in after["media_index"] if item["kind"] == "source_image"
+    )
+    assert diagnostic_after["expires_at"] == first.json()["release_expires_at"]
+    assert diagnostic_after["release_requested_at"]
+    assert source_after == source_before
+    assert client.get(job["result"]["content_url"]).status_code == 200
+
+
+def test_cleanup_expires_only_visual_diagnostics_and_keeps_tombstone(tmp_path):
+    visual_client = _VisualClientWithImageProcessArtifact(
+        payload={
+            "description": "A rotated label.",
+            "visibleText": ["LOT 42"],
+            "candidateNumericValues": ["42"],
+            "layout": "Landscape after rotation.",
+            "imageProcessActions": ["Rotate"],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        },
+        action="rotate",
+        result_bytes=_png_bytes(),
+    )
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+                visual_artifact_ttl_seconds=0.05,
+            ),
+        )
+    )
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("rotated.png", _png_bytes(), "image/png")},
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+    manifest = client.get(job["result"]["manifest_url"]).json()
+    diagnostic = next(
+        item
+        for item in manifest["media_index"]
+        if item["kind"] == "image_process_rotate_result"
+    )
+    diagnostic_url = (
+        f"/parse-jobs/{job['job_id']}/artifacts/{diagnostic['artifact_id']}"
+    )
+    assert client.get(diagnostic_url).status_code == 200
+
+    time.sleep(0.08)
+    cleanup = client.post("/admin/cleanup-expired")
+
+    assert cleanup.status_code == 200
+    assert cleanup.json()["expired_artifact_count"] == 1
+    assert cleanup.json()["expired_artifact_ids"] == [diagnostic["artifact_id"]]
+    expired = client.get(diagnostic_url)
+    assert expired.status_code == 410
+    assert expired.json()["detail"]["code"] == "artifact_expired"
+
+    after = client.get(job["result"]["manifest_url"]).json()
+    tombstone = next(
+        item
+        for item in after["media_index"]
+        if item["artifact_id"] == diagnostic["artifact_id"]
+    )
+    assert tombstone["availability"] == "expired"
+    assert tombstone["expired_at"]
+    assert client.get(job["result"]["content_url"]).status_code == 200
+    source = next(
+        item for item in after["media_index"] if item["kind"] == "source_image"
+    )
+    assert client.get(
+        f"/parse-jobs/{job['job_id']}/artifacts/{source['artifact_id']}"
+    ).status_code == 200
 
 
 def test_uploaded_instrument_photo_transcribes_only_illuminated_display_digits(
@@ -283,6 +488,32 @@ class _CapturingResponses:
 class _VisualClient:
     def __init__(self, payload: dict) -> None:
         self.responses = _CapturingResponses(payload)
+
+
+class _VisualClientWithImageProcessArtifact:
+    def __init__(self, *, payload: dict, action: str, result_bytes: bytes) -> None:
+        encoded = base64.b64encode(result_bytes).decode("ascii")
+        self.responses = self
+        self.payload = payload
+        self.action = action
+        self.result_url = f"data:image/png;base64,{encoded}"
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            output_text=json.dumps(self.payload),
+            output=[
+                SimpleNamespace(
+                    type="image_process",
+                    action=SimpleNamespace(
+                        type=self.action,
+                        result_image_url=self.result_url,
+                    ),
+                    arguments=SimpleNamespace(image_index=0),
+                )
+            ],
+        )
 
 
 class _DisplayReadingResponsesClient:
