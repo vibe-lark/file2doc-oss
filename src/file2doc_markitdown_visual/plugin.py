@@ -142,8 +142,29 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         raise VisualParseError(
             "File2Doc Visual Parsing requires visual_client and visual_model"
         )
+    normalized_model = model.strip()
     markitdown.register_converter(
-        VisualImageConverter(client=client, model=model.strip()),
+        VisualImageConverter(client=client, model=normalized_model),
+        priority=-1,
+    )
+    from .embedded import EmbeddedVisualParser
+    from .office import VisualDocxConverter, VisualPptxConverter, VisualXlsxConverter
+
+    visual_parser = EmbeddedVisualParser(
+        client=client,
+        model=normalized_model,
+        exiftool_path=kwargs.get("exiftool_path"),
+    )
+    markitdown.register_converter(
+        VisualDocxConverter(visual_parser=visual_parser),
+        priority=-1,
+    )
+    markitdown.register_converter(
+        VisualPptxConverter(visual_parser=visual_parser),
+        priority=-1,
+    )
+    markitdown.register_converter(
+        VisualXlsxConverter(visual_parser=visual_parser),
         priority=-1,
     )
 
