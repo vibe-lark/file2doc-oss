@@ -1,3 +1,3 @@
-# MarkItDown primary parser with explicit remote OCR
+# Superseded: MarkItDown primary parser with explicit remote OCR
 
-File2Doc v1 uses MarkItDown as the primary lightweight file-to-Markdown parser, with `markitdown-ocr` enabled through an explicitly configured OpenAI-compatible vision endpoint for OCR. This replaces MinerU pipeline as the v1 primary parser because the first deployment priority is minimal local dependency weight for CPU-only service environments, while still recovering text from image-heavy documents through a controlled remote OCR capability. Other MarkItDown network-backed converters such as Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and built-in audio transcription remain disabled unless a future decision explicitly enables them.
+This decision is superseded by the File2Doc Visual Parsing Boundary. MarkItDown remains the primary lightweight file-to-Markdown parser, but the official `markitdown-ocr` distribution and the `FILE2DOC_OCR_*` runtime contract are retired. File2Doc now independently maintains `file2doc-markitdown-visual` and configures it only through `FILE2DOC_VISUAL_*`.

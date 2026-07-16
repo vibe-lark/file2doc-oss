@@ -19,7 +19,9 @@ The deployment runs one `file2doc` container with:
 - `uvicorn file2doc.main:app --host 0.0.0.0 --port 8000`
 - `FILE2DOC_STORAGE_ROOT=/data/file2doc`
 - `FILE2DOC_MAX_CONCURRENT_JOBS=2`
-- `FILE2DOC_OCR_TIMEOUT_SECONDS=300`
+- `FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS=300`
+- `FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS=900`
+- `FILE2DOC_VISUAL_MAX_CONCURRENCY=4`
 - `FILE2DOC_BEARER_TOKEN` loaded from the `file2doc-secret` Kubernetes Secret
 - a PVC named `file2doc-data` mounted at `/data/file2doc`
 - HTTP readiness and liveness probes for `/readyz` and `/healthz`
@@ -31,9 +33,10 @@ Upload requests only store the source file and enqueue the parse job. Parsing
 runs in background workers inside the Pod, and callers retrieve final output by
 polling the job endpoint and then downloading manifest/artifact URLs.
 
-Remote OCR configuration is intentionally not included here. Keep OCR endpoint
-URLs, model identifiers, and API keys in a separate explicit configuration path
-when that deployment capability is enabled.
+Visual provider model, endpoint, and credential values are loaded from
+Kubernetes Secret keys named `FILE2DOC_VISUAL_MODEL`,
+`FILE2DOC_VISUAL_BASE_URL`, and `FILE2DOC_VISUAL_API_KEY`; do not place their
+values in this manifest.
 
 ## Apply
 

@@ -26,19 +26,15 @@ class ParseFailure(Exception):
 
 
 MarkItDownFactory = Callable[[], Any]
+
+
 @dataclass(frozen=True)
 class ParseOptions:
     markitdown_factory: MarkItDownFactory = lambda: MarkItDown(enable_plugins=False)
-    ocr_model: str | None = None
-    ocr_api_key: str | None = None
-    ocr_base_url: str | None = None
-    ocr_timeout_seconds: float = 300
-    ocr_page_render_scale: float = 1.5
     visual_client: Any | None = None
     visual_model: str | None = None
     visual_api_key: str | None = None
     visual_base_url: str | None = "https://ark.cn-beijing.volces.com/api/v3"
-    visual_timeout_seconds: float = 300
     visual_item_timeout_seconds: float = 300
     visual_job_deadline_seconds: float = 900
     visual_max_concurrency: int = 4
@@ -46,17 +42,19 @@ class ParseOptions:
     @classmethod
     def from_env(cls) -> "ParseOptions":
         return cls(
-            ocr_model=os.getenv("FILE2DOC_OCR_MODEL"),
-            ocr_api_key=os.getenv("FILE2DOC_OCR_API_KEY")
-            or os.getenv("OPENAI_API_KEY"),
-            ocr_base_url=os.getenv("FILE2DOC_OCR_BASE_URL"),
-            ocr_timeout_seconds=_env_float("FILE2DOC_OCR_TIMEOUT_SECONDS", 300),
-            ocr_page_render_scale=_env_float("FILE2DOC_OCR_PAGE_RENDER_SCALE", 1.5),
             visual_model=os.getenv("FILE2DOC_VISUAL_MODEL"),
             visual_api_key=os.getenv("FILE2DOC_VISUAL_API_KEY"),
             visual_base_url=os.getenv("FILE2DOC_VISUAL_BASE_URL")
             or "https://ark.cn-beijing.volces.com/api/v3",
-            visual_timeout_seconds=_env_float("FILE2DOC_VISUAL_TIMEOUT_SECONDS", 300),
+            visual_item_timeout_seconds=_env_float(
+                "FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS", 300
+            ),
+            visual_job_deadline_seconds=_env_float(
+                "FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS", 900
+            ),
+            visual_max_concurrency=_env_int(
+                "FILE2DOC_VISUAL_MAX_CONCURRENCY", 4
+            ),
         )
 
     @property
@@ -85,7 +83,7 @@ class ParseOptions:
             "api_key": self.visual_api_key,
             "base_url": self.visual_base_url
             or "https://ark.cn-beijing.volces.com/api/v3",
-            "timeout": self.visual_timeout_seconds,
+            "timeout": self.visual_item_timeout_seconds,
         }
         return OpenAI(**client_kwargs)
 
@@ -117,7 +115,7 @@ def parse_content_markdown(
             started_at,
         )
 
-    if _is_pdf(content_type) and parse_options.visual_configured:
+    if _is_pdf(content_type) or _is_office(content_type):
         return _parse_with_visual_plugin(
             source_path,
             content_type,
@@ -230,15 +228,23 @@ def _package_version(package_name: str) -> str | None:
         return None
 
 
-def _is_pdf(content_type: str) -> bool:
-    return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
-
-
 def _is_image(content_type: str) -> bool:
     return content_type.split(";", 1)[0].strip().lower() in {
         "image/png",
         "image/jpeg",
         "image/jpg",
+    }
+
+
+def _is_pdf(content_type: str) -> bool:
+    return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
+
+
+def _is_office(content_type: str) -> bool:
+    return content_type.split(";", 1)[0].strip().lower() in {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     }
 
 
@@ -272,6 +278,17 @@ def _env_float(name: str, default: float) -> float:
         return default
     try:
         value = float(configured)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _env_int(name: str, default: int) -> int:
+    configured = os.getenv(name)
+    if configured is None:
+        return default
+    try:
+        value = int(configured)
     except ValueError:
         return default
     return value if value > 0 else default

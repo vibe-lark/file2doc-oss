@@ -6,7 +6,7 @@
     "component": {
       "type": "library",
       "name": "file2doc-markitdown-visual",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "properties": [
         {
           "name": "file2doc:distribution-mode",
@@ -31,6 +31,31 @@
           }
         }
       ]
+    },
+    {
+      "type": "library",
+      "name": "pdfplumber",
+      "version": "0.11.x"
+    },
+    {
+      "type": "library",
+      "name": "Pillow",
+      "version": ">=10"
+    },
+    {
+      "type": "library",
+      "name": "python-docx",
+      "version": "via markitdown[docx]==0.1.2"
+    },
+    {
+      "type": "library",
+      "name": "python-pptx",
+      "version": "via markitdown[pptx]==0.1.2"
+    },
+    {
+      "type": "library",
+      "name": "openpyxl",
+      "version": "via markitdown[xlsx]==0.1.2"
     }
   ]
 }

@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 from importlib.metadata import PackageNotFoundError, entry_points, version
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from markitdown import MarkItDown, StreamInfo
@@ -39,11 +40,18 @@ def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
 
     assert plugin.value == "file2doc_markitdown_visual"
     assert version("markitdown") == "0.1.2"
-    assert __version__ == "0.1.0"
+    assert __version__ == "0.2.0"
     metadata = package_metadata()
     assert metadata["name"] == "file2doc-markitdown-visual"
     assert metadata["distributionMode"] == "embedded-package-in-file2doc-wheel"
     assert metadata["markitdownCoreVersion"] == "0.1.2"
+    assert metadata["runtimeComponents"] == {
+        "pdfplumber": "0.11.x",
+        "Pillow": ">=10",
+        "python-docx": "markitdown[docx]==0.1.2",
+        "python-pptx": "markitdown[pptx]==0.1.2",
+        "openpyxl": "markitdown[xlsx]==0.1.2",
+    }
     assert (
         metadata["upstreamDerivativeSource"]["commit"]
         == "e144e0a2be95b34df17433bac904e635f2c5e551"
@@ -54,6 +62,20 @@ def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
         pass
     else:  # pragma: no cover - protects the deployment environment.
         raise AssertionError("official markitdown-ocr must not be installed")
+
+    sbom = json.loads(
+        (Path(__file__).parents[1] / "src/file2doc_markitdown_visual/sbom.cdx.json")
+        .read_text(encoding="utf-8")
+    )
+    assert sbom["metadata"]["component"]["version"] == "0.2.0"
+    assert {component["name"] for component in sbom["components"]} >= {
+        "markitdown",
+        "pdfplumber",
+        "Pillow",
+        "python-docx",
+        "python-pptx",
+        "openpyxl",
+    }
 
 
 def test_markitdown_public_converter_renders_structured_visual_markdown():
