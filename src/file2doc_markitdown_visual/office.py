@@ -31,9 +31,7 @@ _DOCX_MIME_TYPE = (
 _PPTX_MIME_TYPE = (
     "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 )
-_XLSX_MIME_TYPE = (
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+_XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 class VisualDocxConverter(HtmlConverter):
@@ -60,6 +58,7 @@ class VisualDocxConverter(HtmlConverter):
     ) -> DocumentConverterResult:
         visual_session = self._visual_parser.new_session()
         visual_blocks: list[str] = []
+        visual_warnings: list[str] = []
         placeholder_prefix = f"FILE2DOCVISUAL-{uuid4().hex}-"
         placeholders: list[str] = []
 
@@ -71,6 +70,8 @@ class VisualDocxConverter(HtmlConverter):
                 )
             location = f"DOCX image {len(visual_blocks) + 1}"
             visual_blocks.append(render_embedded_visual(result, location=location))
+            if result.warning is not None:
+                visual_warnings.append(f"{location}: {result.warning}")
             placeholder = f"{placeholder_prefix}{len(visual_blocks) - 1}"
             placeholders.append(placeholder)
             return {"src": placeholder}
@@ -86,6 +87,7 @@ class VisualDocxConverter(HtmlConverter):
         markdown = self._html_converter.convert_string(html, **kwargs).markdown
         for placeholder, block in zip(placeholders, visual_blocks):
             markdown = markdown.replace(placeholder, block, 1)
+        markdown = _append_visual_warnings(markdown, visual_warnings)
         return DocumentConverterResult(markdown=markdown)
 
 
@@ -129,6 +131,7 @@ class VisualPptxConverter(PptxConverter):
         visual_session = self._visual_parser.new_session()
         presentation = pptx.Presentation(file_stream)
         output: list[str] = []
+        visual_warnings: list[str] = []
 
         for slide_number, slide in enumerate(presentation.slides, start=1):
             output.extend(["", f"<!-- Slide number: {slide_number} -->"])
@@ -142,6 +145,8 @@ class VisualPptxConverter(PptxConverter):
                     )
                     location = f"PPTX slide {slide_number}, shape {shape.name}"
                     output.append(render_embedded_visual(result, location=location))
+                    if result.warning is not None:
+                        visual_warnings.append(f"{location}: {result.warning}")
 
                 if self._is_table(shape):
                     output.append(
@@ -166,8 +171,9 @@ class VisualPptxConverter(PptxConverter):
                 if notes_frame is not None and notes_frame.text.strip():
                     output.extend(["### Notes:", notes_frame.text])
 
+        markdown = "\n\n".join(part.strip() for part in output if part.strip())
         return DocumentConverterResult(
-            markdown="\n\n".join(part.strip() for part in output if part.strip())
+            markdown=_append_visual_warnings(markdown, visual_warnings)
         )
 
 
@@ -204,6 +210,7 @@ class VisualXlsxConverter(HtmlConverter):
             engine="openpyxl",
         )
         output: list[str] = []
+        visual_warnings: list[str] = []
 
         for sheet_name in workbook.sheetnames:
             output.append(f"## {sheet_name}")
@@ -229,8 +236,22 @@ class VisualXlsxConverter(HtmlConverter):
                 )
                 location = f"XLSX sheet {sheet_name}, cell {cell}"
                 output.append(render_embedded_visual(result, location=location))
+                if result.warning is not None:
+                    visual_warnings.append(f"{location}: {result.warning}")
 
-        return DocumentConverterResult(markdown="\n\n".join(output).strip())
+        markdown = "\n\n".join(output).strip()
+        return DocumentConverterResult(
+            markdown=_append_visual_warnings(markdown, visual_warnings)
+        )
+
+
+def _append_visual_warnings(markdown: str, warnings: list[str]) -> str:
+    if not warnings:
+        return markdown
+    warning_section = "\n".join(
+        ["## Warnings", "", *(f"- {item}" for item in warnings)]
+    )
+    return f"{markdown.rstrip()}\n\n{warning_section}\n"
 
 
 def _xlsx_anchor_coordinates(image) -> tuple[int, int]:

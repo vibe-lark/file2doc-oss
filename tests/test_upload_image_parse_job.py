@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 import base64
@@ -15,9 +16,51 @@ from file2doc.app import create_app
 from file2doc.parsers import ParseOptions
 
 
-REAL_DISPLAY_FIXTURE = (
-    Path(__file__).parent / "fixtures" / "TBEVA-40-S7-display.jpg"
-)
+REAL_DISPLAY_FIXTURE = Path(__file__).parent / "fixtures" / "TBEVA-40-S7-display.jpg"
+
+
+def test_visual_runtime_logs_provider_and_model_without_sensitive_payload(
+    tmp_path,
+    caplog,
+):
+    secret = "visual-api-key-must-not-be-logged"
+    payload_marker = "VISIBLE-PAYLOAD-MUST-NOT-BE-LOGGED"
+    visual_client = _VisualClient(
+        {
+            "description": payload_marker,
+            "visibleText": [],
+            "candidateNumericValues": [],
+            "layout": "Single centered label.",
+            "imageProcessActions": [],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        }
+    )
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+                visual_api_key=secret,
+            ),
+        )
+    )
+    caplog.set_level(logging.INFO, logger="file2doc.visual")
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("sample.png", _image_bytes("PNG"), "image/png")},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "completed"
+    messages = "\n".join(record.getMessage() for record in caplog.records)
+    assert "provider=ark-responses" in messages
+    assert "model=fake-vision" in messages
+    assert secret not in messages
+    assert payload_marker not in messages
 
 
 @pytest.mark.parametrize(
@@ -75,6 +118,9 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     assert "## Candidate Numeric Values" in content
     assert "## Layout" in content
     assert "## Warnings" in content
+    assert "## Visual Parsing Runtime" in content
+    assert "- Provider: ark-responses" in content
+    assert "- Model: fake-vision" in content
     assert '"visibleText"' not in content
 
     manifest = client.get(job["result"]["manifest_url"]).json()
