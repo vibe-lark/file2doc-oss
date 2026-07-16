@@ -6,7 +6,16 @@ from pathlib import Path
 import shutil
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.responses import FileResponse, JSONResponse
 
 from file2doc.audio import AudioParseOptions
@@ -35,7 +44,9 @@ def create_app(
     app.state.file2doc_background_tasks = set()
     job_semaphore = asyncio.Semaphore(_configured_max_concurrent_jobs())
 
-    async def require_auth(authorization: Annotated[str | None, Header()] = None) -> None:
+    async def require_auth(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> None:
         if not auth_enabled:
             return
         expected = f"Bearer {bearer_token}" if bearer_token else None
@@ -72,13 +83,21 @@ def create_app(
     async def capabilities() -> dict:
         asr_model_dir = _configured_asr_model_dir(audio_parse_options)
         response = {
-            "supported_source_groups": ["pdf", "office", "text", "audio", "video", "image"],
+            "supported_source_groups": [
+                "pdf",
+                "office",
+                "text",
+                "audio",
+                "video",
+                "image",
+            ],
             "auth_required": auth_enabled,
             "storage_root": str(root),
             "local_asr_configured": asr_model_dir is not None,
             "local_asr_model_present": _local_asr_model_present(asr_model_dir),
             "ffmpeg_available": _ffmpeg_available(),
             "remote_ocr_configured": _remote_ocr_configured(),
+            "visual_parsing_configured": _visual_parsing_configured(),
             "page_image_dpi_options": sorted(ALLOWED_PAGE_IMAGE_DPI),
             "page_image_dpi_default": AGENT_PAGE_IMAGE_DPI,
         }
@@ -87,7 +106,9 @@ def create_app(
             response["max_upload_size_mb"] = max_upload_size_mb
         return response
 
-    @app.post("/parse-jobs/upload", status_code=201, dependencies=[Depends(require_auth)])
+    @app.post(
+        "/parse-jobs/upload", status_code=201, dependencies=[Depends(require_auth)]
+    )
     async def upload_parse_job(
         file: Annotated[UploadFile, File()],
         parser_profile: Annotated[str, Form()] = "agent",
@@ -132,7 +153,10 @@ def create_app(
             raise HTTPException(status_code=409, detail={"code": "result_not_ready"})
         return store.read_manifest(job_id)
 
-    @app.get("/parse-jobs/{job_id}/artifacts/{artifact_id}", dependencies=[Depends(require_auth)])
+    @app.get(
+        "/parse-jobs/{job_id}/artifacts/{artifact_id}",
+        dependencies=[Depends(require_auth)],
+    )
     async def get_artifact(job_id: str, artifact_id: str) -> FileResponse:
         artifact = store.read_artifact(job_id, artifact_id)
         return FileResponse(
@@ -154,13 +178,17 @@ def create_app(
     async def cleanup_expired_jobs() -> dict:
         return store.cleanup_expired_jobs()
 
-    @app.post("/parse-jobs/{job_id}/assets/page-image", dependencies=[Depends(require_auth)])
+    @app.post(
+        "/parse-jobs/{job_id}/assets/page-image", dependencies=[Depends(require_auth)]
+    )
     async def regenerate_page_image(
         job_id: str,
         request: Annotated[Any, Body()] = None,
     ) -> dict:
         if not isinstance(request, dict):
-            raise HTTPException(status_code=400, detail={"code": "invalid_page_image_request"})
+            raise HTTPException(
+                status_code=400, detail={"code": "invalid_page_image_request"}
+            )
         page = request.get("page")
         dpi = request.get("dpi")
         if not isinstance(page, int) or isinstance(page, bool) or page < 1:
@@ -239,10 +267,14 @@ def _ffmpeg_available() -> bool:
 def _remote_ocr_configured() -> bool:
     return bool(
         os.environ.get("FILE2DOC_OCR_MODEL")
-        and (
-            os.environ.get("FILE2DOC_OCR_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        )
+        and (os.environ.get("FILE2DOC_OCR_API_KEY") or os.environ.get("OPENAI_API_KEY"))
+    )
+
+
+def _visual_parsing_configured() -> bool:
+    return bool(
+        os.environ.get("FILE2DOC_VISUAL_MODEL")
+        and os.environ.get("FILE2DOC_VISUAL_API_KEY")
     )
 
 

@@ -14,6 +14,8 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
     monkeypatch.setenv("FILE2DOC_OCR_API_KEY", "secret")
     monkeypatch.setenv("FILE2DOC_OCR_BASE_URL", "https://ocr.example.test")
     monkeypatch.setenv("FILE2DOC_OCR_MODEL", "doubao-ocr")
+    monkeypatch.setenv("FILE2DOC_VISUAL_API_KEY", "visual-secret")
+    monkeypatch.setenv("FILE2DOC_VISUAL_MODEL", "ep-visual")
     client = TestClient(
         create_app(
             storage_root=tmp_path / "storage",
@@ -34,6 +36,7 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
         "local_asr_model_present": True,
         "ffmpeg_available": True,
         "remote_ocr_configured": True,
+        "visual_parsing_configured": True,
         "page_image_dpi_options": [144, 216, 288],
         "page_image_dpi_default": 144,
     }
