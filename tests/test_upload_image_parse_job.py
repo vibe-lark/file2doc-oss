@@ -126,7 +126,7 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     manifest = client.get(job["result"]["manifest_url"]).json()
     assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
     assert manifest["parser"]["markitdown_version"] == "0.1.2"
-    assert manifest["parser"]["visual_plugin_version"] == "0.3.0"
+    assert manifest["parser"]["visual_plugin_version"] == "0.3.1"
     source_media = next(
         item for item in manifest["media_index"] if item["kind"] == "source_image"
     )
@@ -489,7 +489,7 @@ def test_cleanup_expires_only_visual_diagnostics_and_keeps_tombstone(tmp_path):
             parse_options=ParseOptions(
                 visual_client=visual_client,
                 visual_model="fake-vision",
-                visual_artifact_ttl_seconds=0.05,
+                visual_artifact_ttl_seconds=0.5,
             ),
         )
     )
@@ -510,7 +510,7 @@ def test_cleanup_expires_only_visual_diagnostics_and_keeps_tombstone(tmp_path):
     )
     assert client.get(diagnostic_url).status_code == 200
 
-    time.sleep(0.08)
+    time.sleep(0.55)
     cleanup = client.post("/admin/cleanup-expired")
 
     assert cleanup.status_code == 200
