@@ -226,6 +226,17 @@ class JobStore:
                 "path": relative_path,
                 "media_type": visual.media_type,
                 "source_ref": visual.source_ref,
+                "diagnostic_ref": visual.diagnostic_ref,
+                "image_process": {
+                    "action": visual.action_type,
+                    "arguments": dict(visual.arguments),
+                    "status": visual.status,
+                    "result": {
+                        "diagnostic_ref": visual.diagnostic_ref,
+                        "artifact_id": artifact_id,
+                    },
+                    "warnings": list(visual.warnings),
+                },
                 "lifecycle": "structured_workflow_draft",
                 "attachment_role": "diagnostic_only",
                 "expires_at": _iso(expires_at),

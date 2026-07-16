@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import io
 from importlib.metadata import PackageNotFoundError, entry_points, version
 import json
@@ -14,21 +15,26 @@ from file2doc_markitdown_visual import (
     package_metadata,
     register_converters,
 )
+from file2doc_markitdown_visual.plugin import VisualArtifactCollector
 
 
 class _CapturingResponses:
-    def __init__(self, payload: dict) -> None:
+    def __init__(self, payload: dict, *, output: list | None = None) -> None:
         self.payload = payload
+        self.output = output or []
         self.calls: list[dict] = []
 
     def create(self, **kwargs):
         self.calls.append(kwargs)
-        return SimpleNamespace(output_text=json.dumps(self.payload))
+        return SimpleNamespace(
+            output_text=json.dumps(self.payload),
+            output=self.output,
+        )
 
 
 class _VisualClient:
-    def __init__(self, payload: dict) -> None:
-        self.responses = _CapturingResponses(payload)
+    def __init__(self, payload: dict, *, output: list | None = None) -> None:
+        self.responses = _CapturingResponses(payload, output=output)
 
 
 def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
@@ -92,12 +98,21 @@ def test_markitdown_public_converter_renders_structured_visual_markdown():
             "visibleText": ["P 47.1", "H 88.52"],
             "candidateNumericValues": ["47.1", "88.52"],
             "layout": "P is above H on the illuminated display.",
-            "imageProcessActions": [
-                "Zoomed the illuminated display before reading both values."
-            ],
-            "imageProcessWarnings": [],
             "warnings": [],
-        }
+        },
+        output=[
+            SimpleNamespace(
+                type="image_process",
+                action=SimpleNamespace(type="zoom"),
+                arguments=SimpleNamespace(
+                    image_index=0,
+                    bbox_str="[10, 20, 90, 80]",
+                    scale=2,
+                ),
+                status="completed",
+                warnings=["Provider clipped one pixel at the crop boundary."],
+            )
+        ],
     )
     markitdown = MarkItDown(enable_builtins=False)
     register_converters(
@@ -121,9 +136,13 @@ def test_markitdown_public_converter_renders_structured_visual_markdown():
     assert "### Requested Capabilities" in result.markdown
     assert "Zoom: enabled" in result.markdown
     assert "Rotate: enabled" in result.markdown
-    assert "### Provider-Reported Actions" in result.markdown
-    assert "Zoomed the illuminated display" in result.markdown
-    assert "### Provider-Reported Warnings" in result.markdown
+    assert "### Provider Tool Calls" in result.markdown
+    assert "Action 1: zoom" in result.markdown
+    assert "image_index=0" in result.markdown
+    assert "bbox_str=[10, 20, 90, 80]" in result.markdown
+    assert "scale=2" in result.markdown
+    assert "Status: completed" in result.markdown
+    assert "Provider clipped one pixel" in result.markdown
     assert "## Warnings" in result.markdown
 
     request = client.responses.calls[0]
@@ -150,14 +169,13 @@ def test_markitdown_public_converter_renders_structured_visual_markdown():
         "visibleText",
         "candidateNumericValues",
         "layout",
-        "imageProcessActions",
-        "imageProcessWarnings",
         "warnings",
     }
     prompt = request["input"][0]["content"][1]["text"]
     assert "Use Rotate when orientation impairs reading" in prompt
     assert "Use Zoom on small or ambiguous regions" in prompt
-    assert "report only Zoom or Rotate actions actually performed" in prompt
+    assert "imageProcessActions" not in prompt
+    assert "imageProcessWarnings" not in prompt
 
 
 def test_visual_request_contract_verifies_active_segments_before_display_ocr():
@@ -167,8 +185,6 @@ def test_visual_request_contract_verifies_active_segments_before_display_ocr():
             "visibleText": ["P 47.1", "H 88.52"],
             "candidateNumericValues": ["47.1", "88.52"],
             "layout": "Two illuminated readings.",
-            "imageProcessActions": [],
-            "imageProcessWarnings": [],
             "warnings": [],
         }
     )
@@ -194,6 +210,58 @@ def test_visual_request_contract_verifies_active_segments_before_display_ocr():
     assert "use Zoom before finalizing the reading" in prompt
 
 
+def test_provider_tool_call_accepts_json_arguments_and_item_level_result():
+    result_bytes = _png_bytes()
+    collector = VisualArtifactCollector()
+    client = _VisualClient(
+        {
+            "description": "A zoomed label.",
+            "visibleText": ["42"],
+            "candidateNumericValues": ["42"],
+            "layout": "Centered.",
+            "warnings": [],
+        },
+        output=[
+            {
+                "type": "image_process",
+                "action": {"type": "zoom"},
+                "arguments": json.dumps(
+                    {
+                        "image_index": 0,
+                        "bbox_str": "<bbox>10 20 90 80</bbox>",
+                        "scale": 2,
+                        "unsafe_provider_field": "must not be rendered",
+                    }
+                ),
+                "status": "completed",
+                "result_image_url": (
+                    "data:image/png;base64,"
+                    + base64.b64encode(result_bytes).decode("ascii")
+                ),
+            }
+        ],
+    )
+    markitdown = MarkItDown(enable_builtins=False)
+    register_converters(
+        markitdown,
+        visual_client=client,
+        visual_model="ep-visual",
+        visual_artifact_collector=collector,
+    )
+
+    result = markitdown.convert_stream(
+        io.BytesIO(_png_bytes()),
+        stream_info=StreamInfo(filename="label.png", mimetype="image/png"),
+    )
+
+    assert "image_index=0" in result.markdown
+    assert "bbox_str=<bbox>10 20 90 80</bbox>" in result.markdown
+    assert "scale=2" in result.markdown
+    assert "unsafe_provider_field" not in result.markdown
+    assert "derived artifact `source_image_sha256:" in result.markdown
+    assert len(collector.artifacts) == 1
+
+
 def test_standard_markitdown_plugin_describes_image_without_visible_text():
     client = _VisualClient(
         {
@@ -201,8 +269,6 @@ def test_standard_markitdown_plugin_describes_image_without_visible_text():
             "visibleText": [],
             "candidateNumericValues": [],
             "layout": "The logo is centered.",
-            "imageProcessActions": [],
-            "imageProcessWarnings": [],
             "warnings": [],
         }
     )
@@ -237,8 +303,6 @@ def test_visual_converter_preserves_supported_exiftool_metadata(tmp_path):
             "visibleText": [],
             "candidateNumericValues": [],
             "layout": "Centered.",
-            "imageProcessActions": [],
-            "imageProcessWarnings": [],
             "warnings": [],
         }
     )

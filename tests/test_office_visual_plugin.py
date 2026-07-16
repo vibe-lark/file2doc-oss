@@ -349,8 +349,6 @@ def _visual_result(*, description, visible_text=None):
         "visibleText": visible_text or [],
         "candidateNumericValues": [],
         "layout": "Centered image.",
-        "imageProcessActions": [],
-        "imageProcessWarnings": [],
         "warnings": [],
     }
 

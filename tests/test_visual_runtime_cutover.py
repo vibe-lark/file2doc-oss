@@ -22,8 +22,6 @@ VALID_RESULT = {
     "visibleText": [],
     "candidateNumericValues": [],
     "layout": "Centered.",
-    "imageProcessActions": [],
-    "imageProcessWarnings": [],
     "warnings": [],
 }
 
