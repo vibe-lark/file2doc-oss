@@ -153,6 +153,40 @@ def test_markitdown_public_converter_renders_structured_visual_markdown():
     assert "report only Zoom or Rotate actions actually performed" in prompt
 
 
+def test_visual_request_contract_verifies_active_segments_before_display_ocr():
+    client = _VisualClient(
+        {
+            "description": "A segmented electronic display.",
+            "visibleText": ["P 47.1", "H 88.52"],
+            "candidateNumericValues": ["47.1", "88.52"],
+            "layout": "Two illuminated readings.",
+            "imageProcessActions": [],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        }
+    )
+    markitdown = MarkItDown(enable_builtins=False)
+    register_converters(markitdown, visual_client=client, visual_model="ep-visual")
+
+    markitdown.convert_stream(
+        io.BytesIO(_png_bytes()),
+        stream_info=StreamInfo(filename="display.png", mimetype="image/png"),
+    )
+
+    request = client.responses.calls[0]
+    assert request["input"][0]["content"][0]["detail"] == "xhigh"
+    assert request["extra_body"] == {"thinking": {"type": "disabled"}}
+    assert request["text"]["format"]["type"] == "json_schema"
+    assert request["text"]["format"]["strict"] is True
+
+    prompt = request["input"][0]["content"][1]["text"]
+    assert "verify every character's illuminated state" in prompt
+    assert "Treat unilluminated segment outlines as blank" in prompt
+    assert "fewer characters than the physical digit positions" in prompt
+    assert "transcribe only the illuminated characters" in prompt
+    assert "use Zoom before finalizing the reading" in prompt
+
+
 def test_standard_markitdown_plugin_describes_image_without_visible_text():
     client = _VisualClient(
         {
