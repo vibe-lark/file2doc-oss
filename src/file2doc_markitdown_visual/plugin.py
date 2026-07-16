@@ -72,11 +72,13 @@ class VisualExecutionPolicy:
         max_concurrency: int,
     ) -> None:
         self.item_timeout_seconds = max(float(item_timeout_seconds), 0.001)
-        self._deadline_at = time.monotonic() + max(float(job_deadline_seconds), 0.001)
-        self._semaphore = threading.BoundedSemaphore(max(1, int(max_concurrency)))
+        self.job_deadline_seconds = max(float(job_deadline_seconds), 0.001)
+        self.max_concurrency = max(1, int(max_concurrency))
+        self.deadline_at = time.monotonic() + self.job_deadline_seconds
+        self._semaphore = threading.BoundedSemaphore(self.max_concurrency)
 
     def call(self, operation):
-        remaining = self._deadline_at - time.monotonic()
+        remaining = self.deadline_at - time.monotonic()
         if remaining <= 0:
             raise VisualItemNotProcessed(
                 "visual item was not processed because the job deadline was reached"
@@ -87,7 +89,7 @@ class VisualExecutionPolicy:
                 "while waiting for provider capacity"
             )
         try:
-            remaining = self._deadline_at - time.monotonic()
+            remaining = self.deadline_at - time.monotonic()
             if remaining <= 0:
                 raise VisualItemNotProcessed(
                     "visual item was not processed because the job deadline was reached"
@@ -234,6 +236,16 @@ def register_converters(markitdown, **kwargs: Any) -> None:
     )
     markitdown.register_converter(
         VisualXlsxConverter(visual_parser=visual_parser),
+        priority=-1,
+    )
+    from .pdf import VisualPdfConverter
+
+    markitdown.register_converter(
+        VisualPdfConverter(
+            client=client,
+            model=model.strip(),
+            execution_policy=execution_policy,
+        ),
         priority=-1,
     )
 

@@ -108,7 +108,15 @@ def parse_content_markdown(
         )
 
     if _is_image(content_type):
-        return _parse_image_with_visual_plugin(
+        return _parse_with_visual_plugin(
+            source_path,
+            content_type,
+            parse_options,
+            started_at,
+        )
+
+    if _is_pdf(content_type) and parse_options.visual_configured:
+        return _parse_with_visual_plugin(
             source_path,
             content_type,
             parse_options,
@@ -137,7 +145,7 @@ def parse_content_markdown(
     )
 
 
-def _parse_image_with_visual_plugin(
+def _parse_with_visual_plugin(
     source_path: Path,
     content_type: str,
     options: ParseOptions,
@@ -189,8 +197,6 @@ def _parse_image_with_visual_plugin(
         ),
         warnings=_warnings_from_markdown(markdown),
     )
-
-
 def _diagnostics(
     *,
     name: str,
@@ -228,6 +234,10 @@ def _is_image(content_type: str) -> bool:
         "image/jpeg",
         "image/jpg",
     }
+
+
+def _is_pdf(content_type: str) -> bool:
+    return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
 
 
 def _warnings_from_markdown(markdown: str) -> list[dict]:
