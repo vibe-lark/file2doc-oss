@@ -1,6 +1,6 @@
 {
   "name": "file2doc-markitdown-visual",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "distributionMode": "embedded-package-in-file2doc-wheel",
   "pluginEntryPoint": "file2doc-markitdown-visual = file2doc_markitdown_visual",
   "markitdownCoreVersion": "0.1.2",
