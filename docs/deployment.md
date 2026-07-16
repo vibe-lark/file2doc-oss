@@ -12,14 +12,17 @@ FILE2DOC_AUTH_ENABLED=true
 FILE2DOC_BEARER_TOKEN=<long-random-token>
 FILE2DOC_MAX_CONCURRENT_JOBS=2
 FILE2DOC_LOCAL_ASR_MODEL_DIR=/data/file2doc/models/sherpa-paraformer-zh
-FILE2DOC_OCR_MODEL=<openai-compatible-vision-model>
-FILE2DOC_OCR_API_KEY=<ocr-provider-api-key>
-FILE2DOC_OCR_BASE_URL=<optional-openai-compatible-base-url>
-FILE2DOC_OCR_TIMEOUT_SECONDS=300
+FILE2DOC_VISUAL_MODEL=<ark-responses-vision-model>
+FILE2DOC_VISUAL_API_KEY=<visual-provider-api-key>
+FILE2DOC_VISUAL_BASE_URL=<ark-compatible-base-url>
+FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS=300
+FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS=900
+FILE2DOC_VISUAL_MAX_CONCURRENCY=4
 ```
 
-`FILE2DOC_OCR_MODEL` plus `FILE2DOC_OCR_API_KEY` enables remote OCR recovery for PDFs that have no extractable text. `FILE2DOC_OCR_BASE_URL` is required only for non-default OpenAI-compatible providers.
-`FILE2DOC_OCR_TIMEOUT_SECONDS` caps a PDF OCR job so remote OCR failures become visible job failures instead of indefinitely occupying a background worker.
+The `FILE2DOC_VISUAL_*` contract enables the File2Doc-owned MarkItDown visual plugin for standalone images, scanned pages, and embedded Office/PDF images. Each provider call is bounded by the item timeout, all calls share the whole-job deadline, and provider concurrency cannot exceed the configured maximum. Provider keys must come from environment or Kubernetes Secret injection and must never be written to manifests or evidence files.
+
+The retired `FILE2DOC_OCR_*` aliases are intentionally unsupported. A deployment using them is misconfigured and will not activate Visual Parsing.
 
 `POST /parse-jobs/upload` returns after the source file is stored and the job is queued. Parsing runs in an in-process background worker, capped by `FILE2DOC_MAX_CONCURRENT_JOBS`, so callers should poll the returned `poll_url` and then fetch result URLs after the job reaches a terminal status.
 

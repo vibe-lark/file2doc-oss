@@ -34,6 +34,7 @@ def create_app(
     video_frame_extractor=None,
 ) -> FastAPI:
     root = Path(storage_root)
+    capability_parse_options = parse_options or ParseOptions.from_env()
     store = JobStore(
         root,
         audio_parse_options=audio_parse_options,
@@ -96,8 +97,15 @@ def create_app(
             "local_asr_configured": asr_model_dir is not None,
             "local_asr_model_present": _local_asr_model_present(asr_model_dir),
             "ffmpeg_available": _ffmpeg_available(),
-            "remote_ocr_configured": _remote_ocr_configured(),
-            "visual_parsing_configured": _visual_parsing_configured(),
+            "visual_parsing_configured": capability_parse_options.visual_configured,
+            "visual_model": capability_parse_options.visual_model,
+            "visual_item_timeout_seconds": (
+                capability_parse_options.visual_item_timeout_seconds
+            ),
+            "visual_job_deadline_seconds": (
+                capability_parse_options.visual_job_deadline_seconds
+            ),
+            "visual_max_concurrency": capability_parse_options.visual_max_concurrency,
             "page_image_dpi_options": sorted(ALLOWED_PAGE_IMAGE_DPI),
             "page_image_dpi_default": AGENT_PAGE_IMAGE_DPI,
         }
@@ -262,20 +270,6 @@ def _ffmpeg_available() -> bool:
         return bool(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception:
         return False
-
-
-def _remote_ocr_configured() -> bool:
-    return bool(
-        os.environ.get("FILE2DOC_OCR_MODEL")
-        and (os.environ.get("FILE2DOC_OCR_API_KEY") or os.environ.get("OPENAI_API_KEY"))
-    )
-
-
-def _visual_parsing_configured() -> bool:
-    return bool(
-        os.environ.get("FILE2DOC_VISUAL_MODEL")
-        and os.environ.get("FILE2DOC_VISUAL_API_KEY")
-    )
 
 
 def _configured_max_upload_size_mb() -> int | None:

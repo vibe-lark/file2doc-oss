@@ -115,7 +115,7 @@ def parse_content_markdown(
             started_at,
         )
 
-    if _is_pdf(content_type) and parse_options.visual_configured:
+    if (_is_pdf(content_type) or _is_office(content_type)) and parse_options.visual_configured:
         return _parse_with_visual_plugin(
             source_path,
             content_type,
@@ -238,6 +238,14 @@ def _is_image(content_type: str) -> bool:
 
 def _is_pdf(content_type: str) -> bool:
     return content_type.split(";", 1)[0].strip().lower() == "application/pdf"
+
+
+def _is_office(content_type: str) -> bool:
+    return content_type.split(";", 1)[0].strip().lower() in {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
 
 
 def _warnings_from_markdown(markdown: str) -> list[dict]:

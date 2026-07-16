@@ -11,12 +11,12 @@ This plan turns the File2Doc v1 contract into a PDF tracer bullet.
 - Target pure CPU Kubernetes deployment first. Size the first production-like Pod generously, with persistent storage mounted at `/data/file2doc`.
 - Build production images in a controlled CI or release builder so dependency
   and image layer caching are reproducible.
-- Preinstall Python, File2Doc, MarkItDown, markitdown-ocr, OpenAI-compatible SDK dependencies, ffmpeg, and local ASR dependencies in the image.
+- Preinstall Python, File2Doc, pinned MarkItDown Core, the File2Doc-owned visual plugin, the provider SDK, ffmpeg, and local ASR dependencies in the image.
 - Use lightweight module boundaries:
   - `api/` for HTTP routes.
   - `jobs/` for job models, store, and worker.
   - `intake/` for file uploads, optional service-local paths, MIME detection, and source file records.
-  - `parsers/` for MarkItDown, remote OCR, local ASR, and future modality adapters.
+  - `parsers/` for MarkItDown, File2Doc Visual Parsing, local ASR, and future modality adapters.
   - `rendering/` for page images and thumbnails.
   - `packages/` for manifest, content markdown, and result package writing.
   - `storage/` for local filesystem storage.
@@ -50,14 +50,14 @@ This plan turns the File2Doc v1 contract into a PDF tracer bullet.
 ## 4. Document Parser
 
 - Integrate MarkItDown as the primary lightweight document-to-Markdown parser.
-- Enable markitdown-ocr with an explicitly configured OpenAI-compatible vision endpoint.
+- Enable `file2doc-markitdown-visual` through the standard MarkItDown plugin entry point for standalone images, PDF pages, and embedded Office images.
 - Disable MarkItDown Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and built-in audio transcription.
 - Do not use temporary text-extraction fallbacks for main content markdown.
-- Record MarkItDown version, markitdown-ocr version, OCR model endpoint id, parser options, and parser errors.
+- Record MarkItDown Core, visual plugin, model endpoint, parser options, and parser errors.
 - Treat complete MarkItDown failure as job failure.
-- Allow `completed_with_warnings` when OCR or media extraction fails but usable Markdown exists.
-- Do not write API keys or OCR request payloads to logs, manifests, parser artifacts, or diagnostics.
-- Configure the OpenAI-compatible OCR endpoint through environment variables or Kubernetes Secret values: `FILE2DOC_OCR_MODEL`, `FILE2DOC_OCR_API_KEY`, and optional `FILE2DOC_OCR_BASE_URL`. Do not hardcode the key in source files, docs, Dockerfiles, manifests, or tests.
+- Allow `completed_with_warnings` when some visual items fail but usable native or visual Markdown exists.
+- Do not write API keys or visual-provider request payloads to logs, manifests, parser artifacts, or diagnostics.
+- Configure Visual Parsing only through `FILE2DOC_VISUAL_MODEL`, `FILE2DOC_VISUAL_API_KEY`, `FILE2DOC_VISUAL_BASE_URL`, `FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS`, `FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS`, and `FILE2DOC_VISUAL_MAX_CONCURRENCY`. The retired `FILE2DOC_OCR_*` names are not aliases.
 
 ## 4a. Audio and Video Parser
 
@@ -88,7 +88,7 @@ This plan turns the File2Doc v1 contract into a PDF tracer bullet.
 
 - Emit persisted progress events using stable stages.
 - Use `completed_with_warnings` for partial parse results.
-- Use clear error codes for hard failures, including parser unavailable, source too large, unsupported type, remote OCR failed, ASR failed, and result expired.
+- Use clear error codes for hard failures, including parser unavailable, source too large, unsupported type, visual parsing failed, ASR failed, and result expired.
 - Include source refs for page-level warnings.
 
 ## 8. API Examples
@@ -112,7 +112,7 @@ This plan turns the File2Doc v1 contract into a PDF tracer bullet.
 - Uploaded PDF creates a parse job successfully.
 - Job status can be polled with stage and progress information.
 - Successful MarkItDown parsing produces a result package.
-- `content.md` is generated from MarkItDown output, with markitdown-ocr used only when explicitly configured.
+- `content.md` is generated from MarkItDown output, with all pixel content routed through `file2doc-markitdown-visual` when configured.
 - `manifest.json` uses `schema_version = file2doc.parse-result.v1`.
 - Media Index includes page images and thumbnails.
 - Page Index includes page, source unit, parse status, and media references.
@@ -122,7 +122,7 @@ This plan turns the File2Doc v1 contract into a PDF tracer bullet.
 - API examples cover file upload, optional service-local path submission if enabled, polling, manifest retrieval, content download, and media artifact download.
 - Result package paths are package-relative and do not expose service-side absolute paths.
 - MarkItDown is the primary document parser.
-- Remote OCR is enabled only through the explicitly configured OpenAI-compatible endpoint.
+- Visual Parsing is enabled only through the canonical `FILE2DOC_VISUAL_*` contract.
 - Azure, URL, YouTube, and built-in audio transcription paths are disabled.
 
 Optional acceptance:

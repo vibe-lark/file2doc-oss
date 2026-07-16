@@ -29,7 +29,7 @@ uploaded PDF
 -> parse job
 -> progress events
 -> MarkItDown Markdown extraction
--> markitdown-ocr with explicitly configured OpenAI-compatible OCR when needed
+-> file2doc-markitdown-visual for every eligible pixel item
 -> thumbnails and page images
 -> OCR layer when available
 -> manifest.json and content.md
@@ -38,7 +38,7 @@ uploaded PDF
 
 This slice should prioritize the job model, result package structure, manifest v1, progress events, and a usable PDF path before broadening Office, video, audio, Excel, derived assets, or full cache reuse.
 
-The first slice uses MarkItDown as the primary document parser. `markitdown-ocr` may call the configured OpenAI-compatible OCR endpoint for image-heavy pages or embedded images. Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription must remain disabled.
+The first slice uses MarkItDown as the primary document parser. `file2doc-markitdown-visual` owns standalone images, scanned pages, and embedded images through the configured Ark Responses endpoint. Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription remain disabled.
 
 If MarkItDown returns usable Markdown but OCR or media extraction fails for some regions, the job may complete with warnings. If a document produces no usable Markdown and OCR is unavailable or fails, the job should fail visibly.
 
@@ -285,7 +285,7 @@ Parser-native outputs may be retained under `parser_artifacts/` for debugging an
   "parser_versions": {
     "file2doc": "0.1.0",
     "markitdown": "unknown",
-    "markitdown_ocr": "unknown",
+    "file2doc_markitdown_visual": "unknown",
     "asr": "unknown"
   },
   "language": {
@@ -338,7 +338,7 @@ Rules:
 - Preserve the source document reading order.
 - Do not summarize, rewrite, or semantically reorganize source content.
 - Only emit a top-level title when the source parser provides an explicit document title.
-- OCR text produced by markitdown-ocr may appear in `content.md` where the OCR plugin inserts it, but OCR provenance should still be recorded in the manifest.
+- Visible text produced by File2Doc Visual Parsing may appear in `content.md` where the visual plugin inserts it; model and plugin provenance remains recorded in parser diagnostics.
 - Refer to media by stable media references, not file paths.
 - Use invisible HTML comments containing YAML for lightweight block metadata when useful.
 - Add block metadata only at coarse boundaries such as source pages, slides, frames, or artifacts when File2Doc can determine them without parser-specific layout data.
@@ -401,7 +401,7 @@ Pages link source page understanding to media and OCR layers.
   "page_image_id": "page-3-image",
   "thumbnail_id": "page-3-thumb",
   "ocr_layer": {
-    "source": "markitdown_ocr",
+    "source": "file2doc_markitdown_visual",
     "path": "ocr/page_003.json",
     "remote": true
   }
@@ -412,7 +412,7 @@ If MarkItDown cannot produce text for a page but rendering succeeds, use `parse_
 
 ## OCR Layer
 
-OCR layers are page-level assets when OCR is performed. In v1, document OCR is provided by `markitdown-ocr` through the explicitly configured OpenAI-compatible endpoint, so OCR layers should record `remote=true`, model endpoint id, and parser provenance.
+OCR layers remain page-level compatibility assets in the result-package contract. When visible text comes from File2Doc Visual Parsing, layers record `remote=true`, the model endpoint id, and `file2doc-markitdown-visual` provenance.
 
 OCR layers should include text when available. Detailed layout blocks are optional and should not be fabricated when the parser does not provide them.
 
@@ -650,7 +650,7 @@ First-version error codes:
 - `resource_limit_exceeded`
 - `parser_unavailable`
 - `parser_parse_failed`
-- `remote_ocr_failed`
+- `visual_item_failed`
 - `asr_failed`
 - `rendering_failed`
 - `thumbnail_generation_failed`
@@ -668,6 +668,6 @@ Parser stderr, stack traces, and tool logs may be stored under `diagnostics/` fo
 
 ## Remote and Local Processing
 
-File2Doc v1 minimizes local dependencies by using MarkItDown for local document conversion and an explicitly configured OpenAI-compatible endpoint for OCR. OCR requests may send extracted document images or rendered pages to the configured remote endpoint.
+File2Doc v1 uses MarkItDown for local native-text conversion and a File2Doc-owned visual boundary for pixel interpretation. Visual requests may send standalone images, extracted embedded images, or rendered pages to the configured Ark Responses endpoint.
 
 Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription are disabled in v1. Audio and video transcription should use the local `sherpa-onnx` ASR path inherited from `attachment-to-doc-local`.

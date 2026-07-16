@@ -88,37 +88,39 @@ def test_k8s_manifests_define_cpu_only_file2doc_deployment() -> None:
     assert container["env"] == [
         {"name": "FILE2DOC_STORAGE_ROOT", "value": "/data/file2doc"},
         {"name": "FILE2DOC_MAX_CONCURRENT_JOBS", "value": "2"},
-        {"name": "FILE2DOC_OCR_TIMEOUT_SECONDS", "value": "300"},
+        {"name": "FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS", "value": "300"},
+        {"name": "FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS", "value": "900"},
+        {"name": "FILE2DOC_VISUAL_MAX_CONCURRENCY", "value": "4"},
         {
             "name": "FILE2DOC_LOCAL_ASR_MODEL_DIR",
             "value": "/data/file2doc/models/sherpa-paraformer-zh",
         },
         {
-            "name": "FILE2DOC_OCR_MODEL",
+            "name": "FILE2DOC_VISUAL_MODEL",
             "valueFrom": {
                 "secretKeyRef": {
                     "name": "file2doc-secret",
-                    "key": "FILE2DOC_OCR_MODEL",
+                    "key": "FILE2DOC_VISUAL_MODEL",
                     "optional": True,
                 }
             },
         },
         {
-            "name": "FILE2DOC_OCR_API_KEY",
+            "name": "FILE2DOC_VISUAL_API_KEY",
             "valueFrom": {
                 "secretKeyRef": {
                     "name": "file2doc-secret",
-                    "key": "FILE2DOC_OCR_API_KEY",
+                    "key": "FILE2DOC_VISUAL_API_KEY",
                     "optional": True,
                 }
             },
         },
         {
-            "name": "FILE2DOC_OCR_BASE_URL",
+            "name": "FILE2DOC_VISUAL_BASE_URL",
             "valueFrom": {
                 "secretKeyRef": {
                     "name": "file2doc-secret",
-                    "key": "FILE2DOC_OCR_BASE_URL",
+                    "key": "FILE2DOC_VISUAL_BASE_URL",
                     "optional": True,
                 }
             },

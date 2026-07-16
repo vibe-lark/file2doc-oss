@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from markitdown import StreamInfo
 from PIL import Image
+from docx import Document
 
 from file2doc.parsers import ParseOptions
 from file2doc_markitdown_visual.embedded import EmbeddedVisualParser
@@ -163,3 +164,35 @@ def test_parse_entrypoint_passes_visual_execution_bounds_to_plugin(tmp_path):
     assert "# Visual Analysis" in parsed.markdown
     assert captured["timeout"] <= 7
     assert captured["timeout"] > 0
+
+
+def test_parse_entrypoint_routes_office_embedded_images_through_visual_plugin(tmp_path):
+    calls = []
+
+    class Responses:
+        def create(self, **kwargs):
+            calls.append(kwargs)
+            return SimpleNamespace(output_text=json.dumps(VALID_RESULT))
+
+    image_path = tmp_path / "embedded.png"
+    image_path.write_bytes(_png_bytes("white"))
+    source = tmp_path / "sample.docx"
+    document = Document()
+    document.add_paragraph("Native office text")
+    document.add_picture(str(image_path))
+    document.save(source)
+
+    from file2doc.parsers import parse_content_markdown
+
+    parsed = parse_content_markdown(
+        source,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ParseOptions(
+            visual_client=SimpleNamespace(responses=Responses()),
+            visual_model="ep-visual",
+        ),
+    )
+
+    assert "Native office text" in parsed.markdown
+    assert "Embedded Image" in parsed.markdown
+    assert calls
