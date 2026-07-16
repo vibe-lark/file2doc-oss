@@ -45,7 +45,7 @@ class ParseOptions:
     visual_client: Any | None = None
     visual_model: str | None = None
     visual_api_key: str | None = None
-    visual_base_url: str | None = None
+    visual_base_url: str | None = "https://ark.cn-beijing.volces.com/api/v3"
     visual_timeout_seconds: float = 300
 
     @classmethod
@@ -104,10 +104,10 @@ class ParseOptions:
             ) from error
         client_kwargs: dict[str, Any] = {
             "api_key": self.visual_api_key,
+            "base_url": self.visual_base_url
+            or "https://ark.cn-beijing.volces.com/api/v3",
             "timeout": self.visual_timeout_seconds,
         }
-        if self.visual_base_url:
-            client_kwargs["base_url"] = self.visual_base_url
         return OpenAI(**client_kwargs)
 
 

@@ -8,7 +8,11 @@ from types import SimpleNamespace
 from markitdown import MarkItDown, StreamInfo
 from PIL import Image
 
-from file2doc_markitdown_visual import __version__, register_converters
+from file2doc_markitdown_visual import (
+    __version__,
+    package_metadata,
+    register_converters,
+)
 
 
 class _CapturingResponses:
@@ -36,6 +40,14 @@ def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
     assert plugin.value == "file2doc_markitdown_visual"
     assert version("markitdown") == "0.1.2"
     assert __version__ == "0.1.0"
+    metadata = package_metadata()
+    assert metadata["name"] == "file2doc-markitdown-visual"
+    assert metadata["distributionMode"] == "embedded-package-in-file2doc-wheel"
+    assert metadata["markitdownCoreVersion"] == "0.1.2"
+    assert (
+        metadata["upstreamDerivativeSource"]["commit"]
+        == "e144e0a2be95b34df17433bac904e635f2c5e551"
+    )
     try:
         version("markitdown-ocr")
     except PackageNotFoundError:
@@ -51,6 +63,10 @@ def test_markitdown_public_converter_renders_structured_visual_markdown():
             "visibleText": ["P 47.1", "H 88.52"],
             "candidateNumericValues": ["47.1", "88.52"],
             "layout": "P is above H on the illuminated display.",
+            "imageProcessActions": [
+                "Zoomed the illuminated display before reading both values."
+            ],
+            "imageProcessWarnings": [],
             "warnings": [],
         }
     )
@@ -73,8 +89,12 @@ def test_markitdown_public_converter_renders_structured_visual_markdown():
     assert "## Candidate Numeric Values" in result.markdown
     assert "## Layout" in result.markdown
     assert "## Image Process" in result.markdown
+    assert "### Requested Capabilities" in result.markdown
     assert "Zoom: enabled" in result.markdown
     assert "Rotate: enabled" in result.markdown
+    assert "### Provider-Reported Actions" in result.markdown
+    assert "Zoomed the illuminated display" in result.markdown
+    assert "### Provider-Reported Warnings" in result.markdown
     assert "## Warnings" in result.markdown
 
     request = client.responses.calls[0]
@@ -101,8 +121,14 @@ def test_markitdown_public_converter_renders_structured_visual_markdown():
         "visibleText",
         "candidateNumericValues",
         "layout",
+        "imageProcessActions",
+        "imageProcessWarnings",
         "warnings",
     }
+    prompt = request["input"][0]["content"][1]["text"]
+    assert "Use Rotate when orientation impairs reading" in prompt
+    assert "Use Zoom on small or ambiguous regions" in prompt
+    assert "report only Zoom or Rotate actions actually performed" in prompt
 
 
 def test_standard_markitdown_plugin_describes_image_without_visible_text():
@@ -112,6 +138,8 @@ def test_standard_markitdown_plugin_describes_image_without_visible_text():
             "visibleText": [],
             "candidateNumericValues": [],
             "layout": "The logo is centered.",
+            "imageProcessActions": [],
+            "imageProcessWarnings": [],
             "warnings": [],
         }
     )
@@ -146,6 +174,8 @@ def test_visual_converter_preserves_supported_exiftool_metadata(tmp_path):
             "visibleText": [],
             "candidateNumericValues": [],
             "layout": "Centered.",
+            "imageProcessActions": [],
+            "imageProcessWarnings": [],
             "warnings": [],
         }
     )

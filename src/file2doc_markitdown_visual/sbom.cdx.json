@@ -1,0 +1,36 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "type": "library",
+      "name": "file2doc-markitdown-visual",
+      "version": "0.1.0",
+      "properties": [
+        {
+          "name": "file2doc:distribution-mode",
+          "value": "embedded-package-in-file2doc-wheel"
+        },
+        {
+          "name": "file2doc:upstream-source-commit",
+          "value": "e144e0a2be95b34df17433bac904e635f2c5e551"
+        }
+      ]
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "name": "markitdown",
+      "version": "0.1.2",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ]
+    }
+  ]
+}

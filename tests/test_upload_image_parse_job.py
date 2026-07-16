@@ -34,6 +34,8 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
             "visibleText": ["HELLO 42"],
             "candidateNumericValues": ["42"],
             "layout": "Single centered label.",
+            "imageProcessActions": ["Zoomed the centered label."],
+            "imageProcessWarnings": [],
             "warnings": [],
         }
     )
@@ -65,6 +67,7 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     assert "## Candidate Numeric Values" in content
     assert "## Layout" in content
     assert "## Warnings" in content
+    assert '"visibleText"' not in content
 
     manifest = client.get(job["result"]["manifest_url"]).json()
     assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
@@ -89,6 +92,8 @@ def test_uploaded_jpeg_with_parser_warning_completes_with_warnings(tmp_path):
             "visibleText": ["LOW CONTRAST"],
             "candidateNumericValues": [],
             "layout": "One line of text.",
+            "imageProcessActions": ["Zoomed the low-contrast label."],
+            "imageProcessWarnings": ["Zoom did not fully resolve the low contrast."],
             "warnings": ["Image is low contrast; extracted text may be incomplete."],
         }
     )
@@ -118,7 +123,10 @@ def test_uploaded_jpeg_with_parser_warning_completes_with_warnings(tmp_path):
     assert manifest["warnings"] == [
         {
             "code": "image_parse_warning",
-            "message": "Image is low contrast; extracted text may be incomplete.",
+            "message": (
+                "Zoom did not fully resolve the low contrast. "
+                "Image is low contrast; extracted text may be incomplete."
+            ),
         }
     ]
     assert manifest["media_index"][0]["media_type"] == "image/jpeg"

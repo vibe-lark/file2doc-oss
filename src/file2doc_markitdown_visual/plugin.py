@@ -20,6 +20,14 @@ VISUAL_RESULT_SCHEMA = {
             "items": {"type": "string"},
         },
         "layout": {"type": "string"},
+        "imageProcessActions": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "imageProcessWarnings": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
@@ -27,6 +35,8 @@ VISUAL_RESULT_SCHEMA = {
         "visibleText",
         "candidateNumericValues",
         "layout",
+        "imageProcessActions",
+        "imageProcessWarnings",
         "warnings",
     ],
     "additionalProperties": False,
@@ -93,11 +103,18 @@ class VisualImageConverter(DocumentConverter):
                             "type": "input_text",
                             "text": (
                                 "Describe this image in detail and transcribe all visible "
-                                "text exactly. Preserve repeated digits, decimal points, "
+                                "text exactly. Before extracting, inspect orientation, "
+                                "small text, display regions, and ambiguous characters. "
+                                "Use Rotate when orientation impairs reading. Use Zoom on "
+                                "small or ambiguous regions before deciding their text or "
+                                "numeric value. Preserve repeated digits, decimal points, "
                                 "reading order, and the distinction between illuminated "
-                                "digits and unlit display placeholders. Return generic "
-                                "visual evidence only; do not infer business fields or "
-                                "domain conclusions."
+                                "digits and unlit display placeholders. In "
+                                "imageProcessActions, report only Zoom or Rotate actions "
+                                "actually performed; use an empty array when neither was "
+                                "used. Put tool-specific limitations in "
+                                "imageProcessWarnings. Return generic visual evidence only; "
+                                "do not infer business fields or domain conclusions."
                             ),
                         },
                     ],
@@ -158,7 +175,13 @@ def _parse_visual_result(output_text: Any) -> dict[str, Any]:
     for field in ("description", "layout"):
         if not isinstance(value[field], str):
             raise VisualParseError(f"Visual provider field {field} must be a string")
-    for field in ("visibleText", "candidateNumericValues", "warnings"):
+    for field in (
+        "visibleText",
+        "candidateNumericValues",
+        "imageProcessActions",
+        "imageProcessWarnings",
+        "warnings",
+    ):
         if not isinstance(value[field], list) or any(
             not isinstance(item, str) for item in value[field]
         ):
@@ -218,14 +241,24 @@ def _render_markdown(result: dict[str, Any], metadata: dict[str, Any]) -> str:
             "",
             "## Image Process",
             "",
+            "### Requested Capabilities",
+            "",
             "- Zoom: enabled",
             "- Rotate: enabled",
             "- Point: disabled",
             "- Grounding: disabled",
             "",
+            "### Provider-Reported Actions",
+            "",
+            _render_list(result["imageProcessActions"]),
+            "",
+            "### Provider-Reported Warnings",
+            "",
+            _render_list(result["imageProcessWarnings"]),
+            "",
             "## Warnings",
             "",
-            _render_list(result["warnings"]),
+            _render_list(_unique(result["imageProcessWarnings"] + result["warnings"])),
         ]
     )
     return "\n".join(lines)
@@ -236,6 +269,10 @@ def _render_list(values: list[str]) -> str:
     if not normalized:
         return "None."
     return "\n".join(f"- {value}" for value in normalized)
+
+
+def _unique(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
 
 
 def _exiftool_metadata(

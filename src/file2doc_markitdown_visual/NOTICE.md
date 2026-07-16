@@ -1,16 +1,23 @@
 # Third-party notice
 
 `file2doc-markitdown-visual` is an independently maintained derivative informed
-by Microsoft's `markitdown-ocr` plugin and MarkItDown Core image converter:
+by Microsoft's `markitdown-ocr` plugin and MarkItDown Core image converter at
+the exact source commit reviewed on 2026-07-16:
 
-- https://github.com/microsoft/markitdown/tree/main/packages/markitdown-ocr
-- https://github.com/microsoft/markitdown/blob/main/packages/markitdown/src/markitdown/converters/_image_converter.py
+- Commit: `e144e0a2be95b34df17433bac904e635f2c5e551`
+- https://github.com/microsoft/markitdown/tree/e144e0a2be95b34df17433bac904e635f2c5e551/packages/markitdown-ocr
+- https://github.com/microsoft/markitdown/blob/e144e0a2be95b34df17433bac904e635f2c5e551/packages/markitdown/src/markitdown/converters/_image_converter.py
 
 The derivative preserves the standard `markitdown.plugin` registration model,
 converter priority, generic detailed-image-description intent, supported image
 metadata fields, and inline Markdown boundary. Provider invocation, structured
 result validation, and failure semantics are independently implemented for
 File2Doc and do not promise future upstream compatibility.
+
+This package is independently versioned even though it is currently shipped
+inside the File2Doc wheel. `PACKAGE-METADATA.json` is the version source and
+provenance manifest; `sbom.cdx.json` records the embedded package, exact
+MarkItDown Core pin, and derivative source for release auditing.
 
 The relevant upstream code is licensed under the MIT License:
 
