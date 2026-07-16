@@ -1,3 +1,4 @@
+import io
 from pathlib import Path
 import json
 from types import SimpleNamespace
@@ -5,6 +6,11 @@ from types import SimpleNamespace
 from docx import Document
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
+from openpyxl.drawing.image import Image as SpreadsheetImage
+from PIL import Image
+from pptx import Presentation
+from pptx.util import Inches
+import pytest
 
 from file2doc.app import create_app
 from file2doc.parsers import ParseOptions
@@ -13,15 +19,24 @@ from fixtures import sample_file
 
 class _Responses:
     def create(self, **kwargs):
-        return SimpleNamespace(output_text=json.dumps({
-            "description": "An embedded document image.",
-            "visibleText": [],
-            "candidateNumericValues": [],
-            "layout": "Embedded in document reading order.",
-            "imageProcessActions": [],
-            "imageProcessWarnings": [],
-            "warnings": [],
-        }))
+        return SimpleNamespace(
+            output_text=json.dumps(
+                {
+                    "description": "An embedded document image.",
+                    "visibleText": [],
+                    "candidateNumericValues": [],
+                    "layout": "Embedded in document reading order.",
+                    "imageProcessActions": [],
+                    "imageProcessWarnings": [],
+                    "warnings": [],
+                }
+            )
+        )
+
+
+class _FailingResponses:
+    def create(self, **kwargs):
+        raise RuntimeError("provider unavailable")
 
 
 def _visual_parse_options() -> ParseOptions:
@@ -31,17 +46,77 @@ def _visual_parse_options() -> ParseOptions:
     )
 
 
+@pytest.mark.parametrize(
+    ("filename", "content_type", "source_bytes", "native_marker"),
+    [
+        (
+            "partial.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            lambda: _docx_with_failed_visual(),
+            "DOCX native content survives",
+        ),
+        (
+            "partial.pptx",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            lambda: _pptx_with_failed_visual(),
+            "PPTX native content survives",
+        ),
+        (
+            "partial.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            lambda: _xlsx_with_failed_visual(),
+            "XLSX native content survives",
+        ),
+    ],
+)
+def test_uploaded_office_with_failed_visual_completes_with_warnings(
+    tmp_path,
+    filename,
+    content_type,
+    source_bytes,
+    native_marker,
+):
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path / "storage",
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=SimpleNamespace(responses=_FailingResponses()),
+                visual_model="ep-visual",
+            ),
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": (filename, source_bytes(), content_type)},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "completed_with_warnings"
+    assert job["warnings_count"] == 1
+    manifest = client.get(job["result"]["manifest_url"]).json()
+    assert manifest["warnings"][0]["code"] == "image_parse_warning"
+    assert "provider unavailable" in manifest["warnings"][0]["message"]
+    markdown = client.get(job["result"]["content_url"]).text
+    assert native_marker in markdown
+    assert "## Warnings" in markdown
+    assert "provider unavailable" in markdown
+
+
 def test_uploaded_docx_produces_non_empty_markitdown_markdown(tmp_path):
     sample = tmp_path / "office-support.docx"
     document = Document()
     document.add_heading("Quarterly Office Support", level=1)
     document.add_paragraph("DOCX generated sample marker: alpha roadmap.")
     document.save(sample)
-    client = TestClient(create_app(
-        storage_root=tmp_path / "storage",
-        auth_enabled=False,
-        parse_options=_visual_parse_options(),
-    ))
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path / "storage",
+            auth_enabled=False,
+            parse_options=_visual_parse_options(),
+        )
+    )
 
     create_response = client.post(
         "/parse-jobs/upload",
@@ -93,11 +168,13 @@ def test_uploaded_xlsx_produces_non_empty_markitdown_markdown(tmp_path):
     worksheet.append(["Metric", "Value"])
     worksheet.append(["XLSX generated sample marker", "beta spreadsheet"])
     workbook.save(sample)
-    client = TestClient(create_app(
-        storage_root=tmp_path / "storage",
-        auth_enabled=False,
-        parse_options=_visual_parse_options(),
-    ))
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path / "storage",
+            auth_enabled=False,
+            parse_options=_visual_parse_options(),
+        )
+    )
 
     create_response = client.post(
         "/parse-jobs/upload",
@@ -145,11 +222,13 @@ def test_uploaded_xlsx_produces_non_empty_markitdown_markdown(tmp_path):
 def test_uploaded_docx_with_no_extracted_markdown_fails_visibly(tmp_path):
     sample = tmp_path / "blank-office-support.docx"
     Document().save(sample)
-    client = TestClient(create_app(
-        storage_root=tmp_path / "storage",
-        auth_enabled=False,
-        parse_options=_visual_parse_options(),
-    ))
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path / "storage",
+            auth_enabled=False,
+            parse_options=_visual_parse_options(),
+        )
+    )
 
     created = client.post(
         "/parse-jobs/upload",
@@ -174,12 +253,16 @@ def test_uploaded_docx_with_no_extracted_markdown_fails_visibly(tmp_path):
 
 
 def test_uploaded_pptx_produces_non_empty_markitdown_markdown(tmp_path):
-    sample = sample_file("1.1.1 基础系列-导读课-大模型技术趋势与企业级 LLMOps 平台价值解读.pptx")
-    client = TestClient(create_app(
-        storage_root=tmp_path,
-        auth_enabled=False,
-        parse_options=_visual_parse_options(),
-    ))
+    sample = sample_file(
+        "1.1.1 基础系列-导读课-大模型技术趋势与企业级 LLMOps 平台价值解读.pptx"
+    )
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=_visual_parse_options(),
+        )
+    )
 
     create_response = client.post(
         "/parse-jobs/upload",
@@ -219,3 +302,41 @@ def test_uploaded_pptx_produces_non_empty_markitdown_markdown(tmp_path):
     assert "大模型技术趋势与企业级 LLMOps 平台价值解读" in content
     assert "AI - 你的必备「数字生产力」" in content
     assert len(content) > 1000
+
+
+def _png_bytes() -> bytes:
+    image = Image.new("RGB", (24, 16), color=(32, 64, 192))
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return output.getvalue()
+
+
+def _docx_with_failed_visual() -> bytes:
+    document = Document()
+    document.add_paragraph("DOCX native content survives")
+    document.add_picture(io.BytesIO(_png_bytes()))
+    output = io.BytesIO()
+    document.save(output)
+    return output.getvalue()
+
+
+def _pptx_with_failed_visual() -> bytes:
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    slide.shapes.add_textbox(
+        Inches(1), Inches(1), Inches(5), Inches(0.5)
+    ).text = "PPTX native content survives"
+    slide.shapes.add_picture(io.BytesIO(_png_bytes()), Inches(1), Inches(2))
+    output = io.BytesIO()
+    presentation.save(output)
+    return output.getvalue()
+
+
+def _xlsx_with_failed_visual() -> bytes:
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(["XLSX native content survives"])
+    sheet.add_image(SpreadsheetImage(io.BytesIO(_png_bytes())), "A3")
+    output = io.BytesIO()
+    workbook.save(output)
+    return output.getvalue()

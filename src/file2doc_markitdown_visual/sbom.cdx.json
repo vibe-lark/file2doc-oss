@@ -39,8 +39,23 @@
     },
     {
       "type": "library",
+      "name": "pypdfium2",
+      "version": ">=4.30"
+    },
+    {
+      "type": "library",
       "name": "Pillow",
       "version": ">=10"
+    },
+    {
+      "type": "library",
+      "name": "mammoth",
+      "version": ">=1.9"
+    },
+    {
+      "type": "library",
+      "name": "pandas",
+      "version": ">=2"
     },
     {
       "type": "library",

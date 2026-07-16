@@ -47,7 +47,10 @@ def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
     assert metadata["markitdownCoreVersion"] == "0.1.2"
     assert metadata["runtimeComponents"] == {
         "pdfplumber": "0.11.x",
+        "pypdfium2": ">=4.30",
         "Pillow": ">=10",
+        "mammoth": ">=1.9",
+        "pandas": ">=2",
         "python-docx": "markitdown[docx]==0.1.2",
         "python-pptx": "markitdown[pptx]==0.1.2",
         "openpyxl": "markitdown[xlsx]==0.1.2",
@@ -64,14 +67,18 @@ def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
         raise AssertionError("official markitdown-ocr must not be installed")
 
     sbom = json.loads(
-        (Path(__file__).parents[1] / "src/file2doc_markitdown_visual/sbom.cdx.json")
-        .read_text(encoding="utf-8")
+        (
+            Path(__file__).parents[1] / "src/file2doc_markitdown_visual/sbom.cdx.json"
+        ).read_text(encoding="utf-8")
     )
     assert sbom["metadata"]["component"]["version"] == "0.2.1"
     assert {component["name"] for component in sbom["components"]} >= {
         "markitdown",
         "pdfplumber",
+        "pypdfium2",
         "Pillow",
+        "mammoth",
+        "pandas",
         "python-docx",
         "python-pptx",
         "openpyxl",
