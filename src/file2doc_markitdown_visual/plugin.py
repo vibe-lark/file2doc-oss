@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import locale
+import logging
 import mimetypes
 import subprocess
 import threading
@@ -11,6 +12,10 @@ from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
+
+
+logger = logging.getLogger("file2doc.visual")
+VISUAL_PROVIDER = "ark-responses"
 
 
 VISUAL_RESULT_SCHEMA = {
@@ -161,63 +166,91 @@ class VisualImageConverter(DocumentConverter):
             exiftool_path=kwargs.get("exiftool_path"),
         )
         encoded = base64.b64encode(file_stream.read()).decode("ascii")
-        execution_policy = self._execution_policy or self._execution_config.create_policy()
-        response = execution_policy.call(
-            lambda timeout: self._client.responses.create(
-                model=self._model,
-                tools=[IMAGE_PROCESS_TOOL],
-                input=[
-                    {
-                        "type": "message",
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_image",
-                                "image_url": f"data:{media_type};base64,{encoded}",
-                                "detail": "xhigh",
-                            },
-                            {
-                                "type": "input_text",
-                                "text": (
-                                    "Describe this image in detail and transcribe all visible "
-                                    "text exactly. Before extracting, inspect orientation, "
-                                    "small text, display regions, and ambiguous characters. "
-                                    "Use Rotate when orientation impairs reading. Use Zoom on "
-                                    "small or ambiguous regions before deciding their text or "
-                                    "numeric value. Preserve repeated digits, decimal points, "
-                                    "reading order, and the distinction between illuminated "
-                                    "digits and unlit display placeholders. For electronic or "
-                                    "segmented displays, verify every character's illuminated "
-                                    "state. Treat unilluminated segment outlines as blank and "
-                                    "never transcribe them. A reading may use fewer characters "
-                                    "than the physical digit positions, so transcribe only the "
-                                    "illuminated characters. If the illumination boundary is "
-                                    "unclear, use Zoom before finalizing the reading. In "
-                                    "imageProcessActions, report only Zoom or Rotate actions "
-                                    "actually performed; use an empty array when neither was "
-                                    "used. Put tool-specific limitations in "
-                                    "imageProcessWarnings. Return generic visual evidence only; "
-                                    "do not infer business fields or domain conclusions."
-                                ),
-                            },
-                        ],
-                    }
-                ],
-                text={
-                    "format": {
-                        "type": "json_schema",
-                        "name": "file2doc_visual_result",
-                        "strict": True,
-                        "schema": VISUAL_RESULT_SCHEMA,
-                    }
-                },
-                extra_headers={"ark-beta-image-process": "true"},
-                extra_body={"thinking": {"type": "disabled"}},
-                timeout=timeout,
+        execution_policy = (
+            self._execution_policy or self._execution_config.create_policy()
+        )
+        logger.info(
+            "visual_provider_request_started provider=%s model=%s",
+            VISUAL_PROVIDER,
+            self._model,
+        )
+        try:
+            response = execution_policy.call(
+                lambda timeout: self._client.responses.create(
+                    model=self._model,
+                    tools=[IMAGE_PROCESS_TOOL],
+                    input=[
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_image",
+                                    "image_url": f"data:{media_type};base64,{encoded}",
+                                    "detail": "xhigh",
+                                },
+                                {
+                                    "type": "input_text",
+                                    "text": (
+                                        "Describe this image in detail and transcribe all visible "
+                                        "text exactly. Before extracting, inspect orientation, "
+                                        "small text, display regions, and ambiguous characters. "
+                                        "Use Rotate when orientation impairs reading. Use Zoom on "
+                                        "small or ambiguous regions before deciding their text or "
+                                        "numeric value. Preserve repeated digits, decimal points, "
+                                        "reading order, and the distinction between illuminated "
+                                        "digits and unlit display placeholders. For electronic or "
+                                        "segmented displays, verify every character's illuminated "
+                                        "state. Treat unilluminated segment outlines as blank and "
+                                        "never transcribe them. A reading may use fewer characters "
+                                        "than the physical digit positions, so transcribe only the "
+                                        "illuminated characters. If the illumination boundary is "
+                                        "unclear, use Zoom before finalizing the reading. In "
+                                        "imageProcessActions, report only Zoom or Rotate actions "
+                                        "actually performed; use an empty array when neither was "
+                                        "used. Put tool-specific limitations in "
+                                        "imageProcessWarnings. Return generic visual evidence only; "
+                                        "do not infer business fields or domain conclusions."
+                                    ),
+                                },
+                            ],
+                        }
+                    ],
+                    text={
+                        "format": {
+                            "type": "json_schema",
+                            "name": "file2doc_visual_result",
+                            "strict": True,
+                            "schema": VISUAL_RESULT_SCHEMA,
+                        }
+                    },
+                    extra_headers={"ark-beta-image-process": "true"},
+                    extra_body={"thinking": {"type": "disabled"}},
+                    timeout=timeout,
+                )
             )
+        except Exception as error:
+            logger.warning(
+                "visual_provider_request_failed provider=%s model=%s error_type=%s",
+                VISUAL_PROVIDER,
+                self._model,
+                type(error).__name__,
+            )
+            raise
+        logger.info(
+            "visual_provider_request_completed provider=%s model=%s",
+            VISUAL_PROVIDER,
+            self._model,
         )
         result = _parse_visual_result(getattr(response, "output_text", None))
-        return DocumentConverterResult(markdown=_render_markdown(result, metadata))
+        return DocumentConverterResult(
+            markdown=_render_markdown(
+                result,
+                metadata,
+                provider=VISUAL_PROVIDER,
+                model=self._model,
+            )
+        )
 
 
 def register_converters(markitdown, **kwargs: Any) -> None:
@@ -317,7 +350,13 @@ def _parse_visual_result(output_text: Any) -> dict[str, Any]:
     return value
 
 
-def _render_markdown(result: dict[str, Any], metadata: dict[str, Any]) -> str:
+def _render_markdown(
+    result: dict[str, Any],
+    metadata: dict[str, Any],
+    *,
+    provider: str,
+    model: str,
+) -> str:
     lines = [
         "# Visual Analysis",
         "",
@@ -349,6 +388,11 @@ def _render_markdown(result: dict[str, Any], metadata: dict[str, Any]) -> str:
         )
     lines.extend(
         [
+            "## Visual Parsing Runtime",
+            "",
+            f"- Provider: {provider}",
+            f"- Model: {model}",
+            "",
             "## Description",
             "",
             result["description"].strip() or "Not described.",

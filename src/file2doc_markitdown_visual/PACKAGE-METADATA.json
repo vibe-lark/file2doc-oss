@@ -6,7 +6,10 @@
   "markitdownCoreVersion": "0.1.2",
   "runtimeComponents": {
     "pdfplumber": "0.11.x",
+    "pypdfium2": ">=4.30",
     "Pillow": ">=10",
+    "mammoth": ">=1.9",
+    "pandas": ">=2",
     "python-docx": "markitdown[docx]==0.1.2",
     "python-pptx": "markitdown[pptx]==0.1.2",
     "openpyxl": "markitdown[xlsx]==0.1.2"
