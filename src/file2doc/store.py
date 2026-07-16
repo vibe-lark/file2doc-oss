@@ -482,10 +482,14 @@ class JobStore:
             artifact = artifacts[artifact_id]
         except KeyError as error:
             raise HTTPException(status_code=404, detail={"code": "artifact_not_found"}) from error
-        if artifact.get("availability") == "expired" or (
+        now = _now()
+        expired = artifact.get("availability") == "expired" or (
             artifact.get("expires_at")
-            and _parse_iso(artifact["expires_at"]) <= _now()
-        ):
+            and _parse_iso(artifact["expires_at"]) <= now
+        )
+        if expired:
+            if _is_visual_diagnostic(artifact):
+                self._cleanup_visual_diagnostics(job_id, now=now)
             raise HTTPException(status_code=410, detail={"code": "artifact_expired"})
         absolute_path = self._job_root(job_id) / "result-package" / artifact["path"]
         return artifact | {"absolute_path": absolute_path}
@@ -638,11 +642,24 @@ class JobStore:
             raise HTTPException(status_code=409, detail={"code": "result_not_ready"})
 
         result_root = self._job_root(job_id) / "result-package"
+        now = _now()
+        self._cleanup_visual_diagnostics(job_id, now=now)
+        artifacts = self._read_json(result_root / "artifacts.json")
+        unavailable_paths = {
+            artifact["path"]
+            for artifact in artifacts.values()
+            if artifact.get("availability") == "expired"
+            or (
+                artifact.get("expires_at")
+                and _parse_iso(artifact["expires_at"]) <= now
+            )
+        }
         package_path = self._job_root(job_id) / f"{job_id}.zip"
         with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
             for path in sorted(result_root.rglob("*")):
-                if path.is_file():
-                    archive.write(path, path.relative_to(result_root).as_posix())
+                relative_path = path.relative_to(result_root).as_posix()
+                if path.is_file() and relative_path not in unavailable_paths:
+                    archive.write(path, relative_path)
         return package_path
 
     def cleanup_expired_jobs(self) -> dict:
@@ -706,6 +723,33 @@ class JobStore:
             "expired_count": expired_count,
             "deleted_bytes": deleted_bytes,
             "deleted_jobs": deleted_jobs,
+            "expired_artifact_count": len(expired_artifact_ids),
+            "expired_artifact_ids": expired_artifact_ids,
+        }
+
+    def cleanup_expired_visual_diagnostics(self) -> dict:
+        now = _now()
+        scanned_count = 0
+        deleted_bytes = 0
+        expired_artifact_ids: list[str] = []
+
+        with self._connect() as connection:
+            rows = connection.execute("select document from jobs").fetchall()
+
+        for row in rows:
+            job = json.loads(row["document"])
+            if job["status"] == "expired":
+                continue
+            scanned_count += 1
+            expired_ids, artifact_bytes = self._cleanup_visual_diagnostics(
+                job["job_id"], now=now
+            )
+            expired_artifact_ids.extend(expired_ids)
+            deleted_bytes += artifact_bytes
+
+        return {
+            "scanned_count": scanned_count,
+            "deleted_bytes": deleted_bytes,
             "expired_artifact_count": len(expired_artifact_ids),
             "expired_artifact_ids": expired_artifact_ids,
         }
