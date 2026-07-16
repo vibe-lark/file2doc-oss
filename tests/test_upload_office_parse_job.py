@@ -26,8 +26,6 @@ class _Responses:
                     "visibleText": [],
                     "candidateNumericValues": [],
                     "layout": "Embedded in document reading order.",
-                    "imageProcessActions": [],
-                    "imageProcessWarnings": [],
                     "warnings": [],
                 }
             )

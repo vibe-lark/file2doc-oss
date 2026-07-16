@@ -356,8 +356,6 @@ def _visual_payload(description: str, visible_text: list[str]) -> dict:
             if any(character.isdigit() for character in value)
         ],
         "layout": "Top to bottom.",
-        "imageProcessActions": [],
-        "imageProcessWarnings": [],
         "warnings": [],
     }
 

@@ -40,14 +40,6 @@ VISUAL_RESULT_SCHEMA = {
             "items": {"type": "string"},
         },
         "layout": {"type": "string"},
-        "imageProcessActions": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
-        "imageProcessWarnings": {
-            "type": "array",
-            "items": {"type": "string"},
-        },
         "warnings": {"type": "array", "items": {"type": "string"}},
     },
     "required": [
@@ -55,8 +47,6 @@ VISUAL_RESULT_SCHEMA = {
         "visibleText",
         "candidateNumericValues",
         "layout",
-        "imageProcessActions",
-        "imageProcessWarnings",
         "warnings",
     ],
     "additionalProperties": False,
@@ -83,8 +73,22 @@ class VisualItemNotProcessed(VisualParseError):
 class VisualDiagnosticArtifact:
     kind: str
     source_ref: str
+    diagnostic_ref: str
     media_type: str
     content: bytes
+    action_type: str
+    arguments: tuple[tuple[str, str], ...]
+    status: str | None
+    warnings: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ImageProcessAudit:
+    action_type: str
+    arguments: tuple[tuple[str, str], ...]
+    status: str | None
+    diagnostic_ref: str | None
+    warnings: tuple[str, ...]
 
 
 class VisualArtifactCollector:
@@ -250,11 +254,8 @@ class VisualImageConverter(DocumentConverter):
                                         "never transcribe them. A reading may use fewer characters "
                                         "than the physical digit positions, so transcribe only the "
                                         "illuminated characters. If the illumination boundary is "
-                                        "unclear, use Zoom before finalizing the reading. In "
-                                        "imageProcessActions, report only Zoom or Rotate actions "
-                                        "actually performed; use an empty array when neither was "
-                                        "used. Put tool-specific limitations in "
-                                        "imageProcessWarnings. Return generic visual evidence only; "
+                                        "unclear, use Zoom before finalizing the reading. Return "
+                                        "generic visual evidence only; "
                                         "do not infer business fields or domain conclusions."
                                     ),
                                 },
@@ -274,18 +275,17 @@ class VisualImageConverter(DocumentConverter):
                     timeout=timeout,
                 )
             )
-            if self._artifact_collector is not None:
-                remaining = max(
-                    execution_policy.deadline_at - time.monotonic(),
-                    0.001,
-                )
-                _collect_image_process_artifacts(
-                    response,
-                    collector=self._artifact_collector,
-                    source_ref=source_ref,
-                    timeout=min(execution_policy.item_timeout_seconds, remaining),
-                    allowed_hosts=self._artifact_allowed_hosts,
-                )
+            remaining = max(
+                execution_policy.deadline_at - time.monotonic(),
+                0.001,
+            )
+            image_process_audits = _collect_image_process_audits(
+                response,
+                collector=self._artifact_collector,
+                source_ref=source_ref,
+                timeout=min(execution_policy.item_timeout_seconds, remaining),
+                allowed_hosts=self._artifact_allowed_hosts,
+            )
         except Exception as error:
             logger.warning(
                 "visual_provider_request_failed provider=%s model=%s error_type=%s",
@@ -306,6 +306,7 @@ class VisualImageConverter(DocumentConverter):
                 metadata,
                 provider=VISUAL_PROVIDER,
                 model=self._model,
+                image_process_audits=image_process_audits,
             )
         )
 
@@ -388,40 +389,115 @@ def _media_type(stream_info: StreamInfo) -> str:
     return guessed or "application/octet-stream"
 
 
-def _collect_image_process_artifacts(
+def _collect_image_process_audits(
     response: Any,
     *,
-    collector: VisualArtifactCollector,
+    collector: VisualArtifactCollector | None,
     source_ref: str,
     timeout: float,
     allowed_hosts: tuple[str, ...],
-) -> None:
+) -> tuple[ImageProcessAudit, ...]:
+    audits: list[ImageProcessAudit] = []
     for item in getattr(response, "output", None) or []:
         if _field(item, "type") != "image_process":
             continue
+        index = len(audits) + 1
         action = _field(item, "action")
-        action_type = _field(action, "type")
-        result_url = _field(action, "result_image_url")
-        if action_type not in {"zoom", "rotate"} or not isinstance(result_url, str):
-            continue
-        try:
-            media_type, content = _download_provider_image(
-                result_url,
-                timeout=timeout,
-                allowed_hosts=allowed_hosts,
-            )
-        except Exception as error:
-            raise VisualParseError(
-                f"Image Process {action_type} result could not be retained: {error}"
-            ) from error
-        collector.add(
-            VisualDiagnosticArtifact(
-                kind=f"image_process_{action_type}_result",
-                source_ref=source_ref,
-                media_type=media_type,
-                content=content,
+        action_type = _normalized_text(_field(action, "type")) or "unknown"
+        arguments = _safe_image_process_arguments(
+            _field(item, "arguments") or _field(action, "arguments")
+        )
+        status = (
+            _normalized_text(_field(item, "status"))
+            or _normalized_text(_field(action, "status"))
+        )
+        warnings = _provider_tool_warnings(item, action)
+        result_url = _field(action, "result_image_url") or _field(
+            item, "result_image_url"
+        )
+        diagnostic_ref = None
+        if action_type in {"zoom", "rotate"} and isinstance(result_url, str):
+            if collector is not None:
+                try:
+                    media_type, content = _download_provider_image(
+                        result_url,
+                        timeout=timeout,
+                        allowed_hosts=allowed_hosts,
+                    )
+                except Exception as error:
+                    raise VisualParseError(
+                        f"Image Process {action_type} result could not be retained: {error}"
+                    ) from error
+                diagnostic_ref = f"{source_ref}:image_process:{index:04d}"
+                collector.add(
+                    VisualDiagnosticArtifact(
+                        kind=f"image_process_{action_type}_result",
+                        source_ref=source_ref,
+                        diagnostic_ref=diagnostic_ref,
+                        media_type=media_type,
+                        content=content,
+                        action_type=action_type,
+                        arguments=arguments,
+                        status=status,
+                        warnings=warnings,
+                    )
+                )
+        audits.append(
+            ImageProcessAudit(
+                action_type=action_type,
+                arguments=arguments,
+                status=status,
+                diagnostic_ref=diagnostic_ref,
+                warnings=warnings,
             )
         )
+    return tuple(audits)
+
+
+_SAFE_IMAGE_PROCESS_ARGUMENT_FIELDS = (
+    "image_index",
+    "bbox_str",
+    "scale",
+    "angle",
+    "degree",
+    "direction",
+)
+
+
+def _safe_image_process_arguments(value: Any) -> tuple[tuple[str, str], ...]:
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return ()
+        value = parsed if isinstance(parsed, dict) else None
+    arguments: list[tuple[str, str]] = []
+    for name in _SAFE_IMAGE_PROCESS_ARGUMENT_FIELDS:
+        raw = _field(value, name)
+        if isinstance(raw, bool):
+            arguments.append((name, str(raw).lower()))
+        elif isinstance(raw, (str, int, float)):
+            arguments.append((name, str(raw).strip()))
+    return tuple(arguments)
+
+
+def _provider_tool_warnings(item: Any, action: Any) -> tuple[str, ...]:
+    warnings: list[str] = []
+    for owner in (item, action, _field(item, "result"), _field(action, "result")):
+        value = _field(owner, "warnings")
+        if isinstance(value, str) and value.strip():
+            warnings.append(value.strip())
+        elif isinstance(value, (list, tuple)):
+            warnings.extend(
+                entry.strip()
+                for entry in value
+                if isinstance(entry, str) and entry.strip()
+            )
+    return tuple(dict.fromkeys(warnings))
+
+
+def _normalized_text(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _field(value: Any, name: str) -> Any:
@@ -561,8 +637,6 @@ def _parse_visual_result(output_text: Any) -> dict[str, Any]:
     for field in (
         "visibleText",
         "candidateNumericValues",
-        "imageProcessActions",
-        "imageProcessWarnings",
         "warnings",
     ):
         if not isinstance(value[field], list) or any(
@@ -580,6 +654,7 @@ def _render_markdown(
     *,
     provider: str,
     model: str,
+    image_process_audits: tuple[ImageProcessAudit, ...],
 ) -> str:
     lines = [
         "# Visual Analysis",
@@ -642,20 +717,47 @@ def _render_markdown(
             "- Point: disabled",
             "- Grounding: disabled",
             "",
-            "### Provider-Reported Actions",
+            "### Provider Tool Calls",
             "",
-            _render_list(result["imageProcessActions"]),
-            "",
-            "### Provider-Reported Warnings",
-            "",
-            _render_list(result["imageProcessWarnings"]),
+            _render_image_process_audits(image_process_audits),
             "",
             "## Warnings",
             "",
-            _render_list(_unique(result["imageProcessWarnings"] + result["warnings"])),
+            _render_list(
+                _unique(
+                    [
+                        warning
+                        for audit in image_process_audits
+                        for warning in audit.warnings
+                    ]
+                    + result["warnings"]
+                )
+            ),
         ]
     )
     return "\n".join(lines)
+
+
+def _render_image_process_audits(audits: tuple[ImageProcessAudit, ...]) -> str:
+    if not audits:
+        return "None."
+    rendered: list[str] = []
+    for index, audit in enumerate(audits, 1):
+        rendered.append(f"- Action {index}: {audit.action_type}")
+        arguments = "; ".join(f"{name}={value}" for name, value in audit.arguments)
+        rendered.append(f"  - Arguments: {arguments or 'None provided.'}")
+        rendered.append(f"  - Status: {audit.status or 'Not provided.'}")
+        rendered.append(
+            "  - Result: "
+            + (
+                f"derived artifact `{audit.diagnostic_ref}`"
+                if audit.diagnostic_ref
+                else "No retained derived artifact."
+            )
+        )
+        if audit.warnings:
+            rendered.append(f"  - Provider warnings: {'; '.join(audit.warnings)}")
+    return "\n".join(rendered)
 
 
 def _render_list(values: list[str]) -> str:

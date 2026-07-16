@@ -34,8 +34,6 @@ def test_visual_runtime_logs_provider_and_model_without_sensitive_payload(
             "visibleText": [],
             "candidateNumericValues": [],
             "layout": "Single centered label.",
-            "imageProcessActions": [],
-            "imageProcessWarnings": [],
             "warnings": [],
         }
     )
@@ -88,8 +86,6 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
             "visibleText": ["HELLO 42"],
             "candidateNumericValues": ["42"],
             "layout": "Single centered label.",
-            "imageProcessActions": ["Zoomed the centered label."],
-            "imageProcessWarnings": [],
             "warnings": [],
         }
     )
@@ -125,6 +121,7 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     assert "- Provider: ark-responses" in content
     assert "- Model: fake-vision" in content
     assert '"visibleText"' not in content
+    assert "### Provider Tool Calls\n\nNone." in content
 
     manifest = client.get(job["result"]["manifest_url"]).json()
     assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
@@ -155,8 +152,6 @@ def test_zoom_result_is_exposed_as_short_lived_diagnostic_artifact(tmp_path):
             "visibleText": ["H 88.52"],
             "candidateNumericValues": ["88.52"],
             "layout": "One illuminated display.",
-            "imageProcessActions": ["Zoom"],
-            "imageProcessWarnings": [],
             "warnings": [],
         },
         action="zoom",
@@ -189,6 +184,23 @@ def test_zoom_result_is_exposed_as_short_lived_diagnostic_artifact(tmp_path):
         if item["kind"] == "image_process_zoom_result"
     )
     assert zoom_media["source_ref"].startswith("source_image_sha256:")
+    assert zoom_media["diagnostic_ref"] == (
+        zoom_media["source_ref"] + ":image_process:0001"
+    )
+    assert zoom_media["image_process"] == {
+        "action": "zoom",
+        "arguments": {
+            "image_index": "0",
+            "bbox_str": "[10, 20, 90, 80]",
+            "scale": "2",
+        },
+        "status": "completed",
+        "result": {
+            "diagnostic_ref": zoom_media["diagnostic_ref"],
+            "artifact_id": zoom_media["artifact_id"],
+        },
+        "warnings": [],
+    }
     assert zoom_media["lifecycle"] == "structured_workflow_draft"
     assert zoom_media["attachment_role"] == "diagnostic_only"
     assert zoom_media["expires_at"] < manifest["expires_at"]
@@ -202,6 +214,7 @@ def test_zoom_result_is_exposed_as_short_lived_diagnostic_artifact(tmp_path):
 
     content = client.get(job["result"]["content_url"]).text
     assert zoom_media["path"] not in content
+    assert f"derived artifact `{zoom_media['diagnostic_ref']}`" in content
 
 
 def test_releasing_diagnostics_shortens_only_derived_artifact_lifetime(tmp_path):
@@ -211,8 +224,6 @@ def test_releasing_diagnostics_shortens_only_derived_artifact_lifetime(tmp_path)
             "visibleText": ["42"],
             "candidateNumericValues": ["42"],
             "layout": "Centered.",
-            "imageProcessActions": ["Zoom"],
-            "imageProcessWarnings": [],
             "warnings": [],
         },
         action="zoom",
@@ -466,8 +477,6 @@ def test_cleanup_expires_only_visual_diagnostics_and_keeps_tombstone(tmp_path):
             "visibleText": ["LOT 42"],
             "candidateNumericValues": ["42"],
             "layout": "Landscape after rotation.",
-            "imageProcessActions": ["Rotate"],
-            "imageProcessWarnings": [],
             "warnings": [],
         },
         action="rotate",
@@ -535,8 +544,6 @@ def test_unavailable_image_process_result_fails_without_markdown_fallback(tmp_pa
             "visibleText": ["42"],
             "candidateNumericValues": ["42"],
             "layout": "Centered.",
-            "imageProcessActions": ["Zoom"],
-            "imageProcessWarnings": [],
             "warnings": [],
         },
         action="zoom",
@@ -686,16 +693,17 @@ def test_uploaded_instrument_photo_transcribes_only_illuminated_display_digits(
 
 
 def test_uploaded_jpeg_with_parser_warning_completes_with_warnings(tmp_path):
-    visual_client = _VisualClient(
-        {
+    visual_client = _VisualClientWithImageProcessArtifact(
+        payload={
             "description": "A low-contrast label.",
             "visibleText": ["LOW CONTRAST"],
             "candidateNumericValues": [],
             "layout": "One line of text.",
-            "imageProcessActions": ["Zoomed the low-contrast label."],
-            "imageProcessWarnings": ["Zoom did not fully resolve the low contrast."],
             "warnings": ["Image is low contrast; extracted text may be incomplete."],
-        }
+        },
+        action="zoom",
+        result_bytes=_png_bytes(),
+        warnings=["Zoom did not fully resolve the low contrast."],
     )
 
     client = TestClient(
@@ -810,6 +818,39 @@ def test_uploaded_image_with_invalid_structured_result_fails_without_fallback(tm
     assert len(visual_client.responses.calls) == 1
 
 
+def test_model_cannot_self_report_image_process_actions(tmp_path):
+    visual_client = _VisualClient(
+        {
+            "description": "A label.",
+            "visibleText": ["42"],
+            "candidateNumericValues": ["42"],
+            "layout": "Centered.",
+            "warnings": [],
+            "imageProcessActions": ["I used Zoom"],
+        }
+    )
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+            ),
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("forged.png", _png_bytes(), "image/png")},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "failed"
+    assert job["error"]["code"] == "visual_item_failed"
+    assert "required schema" in job["error"]["message"]
+
+
 def _png_bytes() -> bytes:
     return _image_bytes("PNG")
 
@@ -841,12 +882,20 @@ class _VisualClient:
 
 
 class _VisualClientWithImageProcessArtifact:
-    def __init__(self, *, payload: dict, action: str, result_bytes: bytes) -> None:
+    def __init__(
+        self,
+        *,
+        payload: dict,
+        action: str,
+        result_bytes: bytes,
+        warnings: list[str] | None = None,
+    ) -> None:
         encoded = base64.b64encode(result_bytes).decode("ascii")
         self.responses = self
         self.payload = payload
         self.action = action
         self.result_url = f"data:image/png;base64,{encoded}"
+        self.warnings = warnings or []
         self.calls: list[dict] = []
 
     def create(self, **kwargs):
@@ -854,13 +903,20 @@ class _VisualClientWithImageProcessArtifact:
         return SimpleNamespace(
             output_text=json.dumps(self.payload),
             output=[
+                SimpleNamespace(type="message", status="completed"),
                 SimpleNamespace(
                     type="image_process",
                     action=SimpleNamespace(
                         type=self.action,
                         result_image_url=self.result_url,
                     ),
-                    arguments=SimpleNamespace(image_index=0),
+                    arguments=SimpleNamespace(
+                        image_index=0,
+                        bbox_str="[10, 20, 90, 80]",
+                        scale=2,
+                    ),
+                    status="completed",
+                    warnings=self.warnings,
                 )
             ],
         )
@@ -873,8 +929,6 @@ def _diagnostic_visual_client() -> _VisualClientWithImageProcessArtifact:
             "visibleText": ["42"],
             "candidateNumericValues": ["42"],
             "layout": "Centered.",
-            "imageProcessActions": ["Zoom"],
-            "imageProcessWarnings": [],
             "warnings": [],
         },
         action="zoom",
@@ -930,8 +984,6 @@ class _DisplayReadingResponsesClient:
                         "88.52",
                     ],
                     "layout": "P is left of H on the illuminated display.",
-                    "imageProcessActions": [],
-                    "imageProcessWarnings": [],
                     "warnings": [],
                 }
             )
