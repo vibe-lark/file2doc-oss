@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -26,36 +28,23 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     expected_media_type,
 ):
     image_bytes = _image_bytes(image_format)
-    calls = []
-
-    def fake_image_runner(source_path, options):
-        calls.append((source_path.name, options.ocr_model))
-        return """# Image Analysis
-
-## Visible Text
-
-HELLO 42
-
-## Candidate Numeric Values
-
-- 42
-
-## Layout
-
-Single centered label.
-
-## Warnings
-
-None.
-"""
+    visual_client = _VisualClient(
+        {
+            "description": "A centered sample label.",
+            "visibleText": ["HELLO 42"],
+            "candidateNumericValues": ["42"],
+            "layout": "Single centered label.",
+            "warnings": [],
+        }
+    )
 
     client = TestClient(
         create_app(
             storage_root=tmp_path,
             auth_enabled=False,
             parse_options=ParseOptions(
-                image_runner=fake_image_runner,
-                ocr_model="fake-vision",
+                visual_client=visual_client,
+                visual_model="fake-vision",
             ),
         )
     )
@@ -68,7 +57,7 @@ None.
     job = client.get(created["poll_url"]).json()
 
     assert job["status"] == "completed"
-    assert calls == [(filename, "fake-vision")]
+    assert len(visual_client.responses.calls) == 1
 
     content = client.get(job["result"]["content_url"]).text
     assert "## Visible Text" in content
@@ -78,8 +67,12 @@ None.
     assert "## Warnings" in content
 
     manifest = client.get(job["result"]["manifest_url"]).json()
-    assert manifest["parser"]["name"] == "image-vision"
-    source_media = next(item for item in manifest["media_index"] if item["kind"] == "source_image")
+    assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
+    assert manifest["parser"]["markitdown_version"] == "0.1.2"
+    assert manifest["parser"]["visual_plugin_version"] == "0.1.0"
+    source_media = next(
+        item for item in manifest["media_index"] if item["kind"] == "source_image"
+    )
     assert source_media["media_type"] == expected_media_type
 
     source_artifact = client.get(
@@ -90,31 +83,24 @@ None.
 
 
 def test_uploaded_jpeg_with_parser_warning_completes_with_warnings(tmp_path):
-    def warning_image_runner(source_path, options):
-        return """# Image Analysis
-
-## Visible Text
-
-LOW CONTRAST
-
-## Candidate Numeric Values
-
-None.
-
-## Layout
-
-One line of text.
-
-## Warnings
-
-- Image is low contrast; extracted text may be incomplete.
-"""
+    visual_client = _VisualClient(
+        {
+            "description": "A low-contrast label.",
+            "visibleText": ["LOW CONTRAST"],
+            "candidateNumericValues": [],
+            "layout": "One line of text.",
+            "warnings": ["Image is low contrast; extracted text may be incomplete."],
+        }
+    )
 
     client = TestClient(
         create_app(
             storage_root=tmp_path,
             auth_enabled=False,
-            parse_options=ParseOptions(image_runner=warning_image_runner),
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+            ),
         )
     )
 
@@ -139,14 +125,16 @@ One line of text.
 
 
 def test_uploaded_image_with_failing_vision_runner_fails_job(tmp_path):
-    def failing_image_runner(source_path, options):
-        raise TimeoutError("vision request timed out")
-
     client = TestClient(
         create_app(
             storage_root=tmp_path,
             auth_enabled=False,
-            parse_options=ParseOptions(image_runner=failing_image_runner),
+            parse_options=ParseOptions(
+                visual_client=_FailingVisualClient(
+                    TimeoutError("vision request timed out")
+                ),
+                visual_model="fake-vision",
+            ),
         )
     )
 
@@ -158,8 +146,8 @@ def test_uploaded_image_with_failing_vision_runner_fails_job(tmp_path):
     job = client.get(created["poll_url"]).json()
 
     assert job["status"] == "failed"
-    assert job["error"]["code"] == "image_vision_failed"
-    assert "timed out" in job["error"]["message"]
+    assert job["error"]["code"] == "visual_item_failed"
+    assert "timeout.png" in job["error"]["message"]
 
     result_response = client.get(f"/parse-jobs/{job['job_id']}/result")
     assert result_response.status_code == 409
@@ -171,7 +159,10 @@ def test_uploaded_image_with_empty_vision_result_fails_job(tmp_path):
         create_app(
             storage_root=tmp_path,
             auth_enabled=False,
-            parse_options=ParseOptions(image_runner=lambda source_path, options: "   "),
+            parse_options=ParseOptions(
+                visual_client=_RawVisualClient("   "),
+                visual_model="fake-vision",
+            ),
         )
     )
 
@@ -183,7 +174,32 @@ def test_uploaded_image_with_empty_vision_result_fails_job(tmp_path):
     job = client.get(created["poll_url"]).json()
 
     assert job["status"] == "failed"
-    assert job["error"]["code"] == "empty_parse_result"
+    assert job["error"]["code"] == "visual_item_failed"
+
+
+def test_uploaded_image_with_invalid_structured_result_fails_without_fallback(tmp_path):
+    visual_client = _RawVisualClient("not-json")
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+            ),
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("invalid.png", _png_bytes(), "image/png")},
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "failed"
+    assert job["error"]["code"] == "visual_item_failed"
+    assert len(visual_client.responses.calls) == 1
 
 
 def _png_bytes() -> bytes:
@@ -199,3 +215,46 @@ def _image_bytes(image_format: str) -> bytes:
     buffer = io.BytesIO()
     image.save(buffer, format=image_format)
     return buffer.getvalue()
+
+
+class _CapturingResponses:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(output_text=json.dumps(self.payload))
+
+
+class _VisualClient:
+    def __init__(self, payload: dict) -> None:
+        self.responses = _CapturingResponses(payload)
+
+
+class _RawResponses:
+    def __init__(self, output_text: str) -> None:
+        self.output_text = output_text
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(output_text=self.output_text)
+
+
+class _RawVisualClient:
+    def __init__(self, output_text: str) -> None:
+        self.responses = _RawResponses(output_text)
+
+
+class _FailingResponses:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def create(self, **kwargs):
+        raise self.error
+
+
+class _FailingVisualClient:
+    def __init__(self, error: Exception) -> None:
+        self.responses = _FailingResponses(error)

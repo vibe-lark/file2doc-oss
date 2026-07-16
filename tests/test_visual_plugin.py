@@ -1,0 +1,166 @@
+from __future__ import annotations
+
+import io
+from importlib.metadata import PackageNotFoundError, entry_points, version
+import json
+from types import SimpleNamespace
+
+from markitdown import MarkItDown, StreamInfo
+from PIL import Image
+
+from file2doc_markitdown_visual import __version__, register_converters
+
+
+class _CapturingResponses:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(output_text=json.dumps(self.payload))
+
+
+class _VisualClient:
+    def __init__(self, payload: dict) -> None:
+        self.responses = _CapturingResponses(payload)
+
+
+def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
+    plugin = next(
+        entry_point
+        for entry_point in entry_points(group="markitdown.plugin")
+        if entry_point.name == "file2doc-markitdown-visual"
+    )
+
+    assert plugin.value == "file2doc_markitdown_visual"
+    assert version("markitdown") == "0.1.2"
+    assert __version__ == "0.1.0"
+    try:
+        version("markitdown-ocr")
+    except PackageNotFoundError:
+        pass
+    else:  # pragma: no cover - protects the deployment environment.
+        raise AssertionError("official markitdown-ocr must not be installed")
+
+
+def test_markitdown_public_converter_renders_structured_visual_markdown():
+    client = _VisualClient(
+        {
+            "description": "A laboratory instrument display with two readings.",
+            "visibleText": ["P 47.1", "H 88.52"],
+            "candidateNumericValues": ["47.1", "88.52"],
+            "layout": "P is above H on the illuminated display.",
+            "warnings": [],
+        }
+    )
+    markitdown = MarkItDown(enable_builtins=False)
+    register_converters(
+        markitdown,
+        visual_client=client,
+        visual_model="ep-visual",
+    )
+
+    result = markitdown.convert_stream(
+        io.BytesIO(_png_bytes()),
+        stream_info=StreamInfo(filename="instrument.png", mimetype="image/png"),
+    )
+
+    assert "## Description" in result.markdown
+    assert "A laboratory instrument display" in result.markdown
+    assert "P 47.1" in result.markdown
+    assert "H 88.52" in result.markdown
+    assert "## Candidate Numeric Values" in result.markdown
+    assert "## Layout" in result.markdown
+    assert "## Image Process" in result.markdown
+    assert "Zoom: enabled" in result.markdown
+    assert "Rotate: enabled" in result.markdown
+    assert "## Warnings" in result.markdown
+
+    request = client.responses.calls[0]
+    assert request["model"] == "ep-visual"
+    assert request["tools"] == [
+        {
+            "type": "image_process",
+            "point": {"type": "disabled"},
+            "grounding": {"type": "disabled"},
+            "zoom": {"type": "enabled"},
+            "rotate": {"type": "enabled"},
+        }
+    ]
+    assert request["extra_headers"] == {"ark-beta-image-process": "true"}
+    assert request["extra_body"] == {"thinking": {"type": "disabled"}}
+    image_input = request["input"][0]["content"][0]
+    assert image_input["type"] == "input_image"
+    assert image_input["detail"] == "xhigh"
+    output_format = request["text"]["format"]
+    assert output_format["type"] == "json_schema"
+    assert output_format["strict"] is True
+    assert set(output_format["schema"]["required"]) == {
+        "description",
+        "visibleText",
+        "candidateNumericValues",
+        "layout",
+        "warnings",
+    }
+
+
+def test_standard_markitdown_plugin_describes_image_without_visible_text():
+    client = _VisualClient(
+        {
+            "description": "A blue circular company logo on a white background.",
+            "visibleText": [],
+            "candidateNumericValues": [],
+            "layout": "The logo is centered.",
+            "warnings": [],
+        }
+    )
+    markitdown = MarkItDown(
+        enable_builtins=False,
+        enable_plugins=True,
+        visual_client=client,
+        visual_model="ep-visual",
+    )
+
+    result = markitdown.convert_stream(
+        io.BytesIO(_png_bytes()),
+        stream_info=StreamInfo(filename="logo.png", mimetype="image/png"),
+    )
+
+    assert "A blue circular company logo" in result.markdown
+    assert "## Visible Text\n\nNone." in result.markdown
+
+
+def test_visual_converter_preserves_supported_exiftool_metadata(tmp_path):
+    image_path = tmp_path / "sample.png"
+    image_path.write_bytes(_png_bytes())
+    exiftool = tmp_path / "exiftool"
+    exiftool.write_text(
+        '#!/bin/sh\ncat >/dev/null\nprintf \'[{"ImageSize":"16x16","Title":"Lab sample"}]\'\n',
+        encoding="utf-8",
+    )
+    exiftool.chmod(0o755)
+    client = _VisualClient(
+        {
+            "description": "A sample image.",
+            "visibleText": [],
+            "candidateNumericValues": [],
+            "layout": "Centered.",
+            "warnings": [],
+        }
+    )
+    markitdown = MarkItDown(enable_builtins=False)
+    register_converters(markitdown, visual_client=client, visual_model="ep-visual")
+
+    result = markitdown.convert(image_path, exiftool_path=str(exiftool))
+
+    assert "## Image Metadata" in result.markdown
+    assert "- ImageSize: 16x16" in result.markdown
+    assert "- Title: Lab sample" in result.markdown
+
+
+def _png_bytes() -> bytes:
+    image = Image.new("RGB", (16, 16), color=(255, 255, 255))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
