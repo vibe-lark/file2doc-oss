@@ -86,6 +86,9 @@ class VisualImageConverter(DocumentConverter):
             exiftool_path=kwargs.get("exiftool_path"),
         )
         encoded = base64.b64encode(file_stream.read()).decode("ascii")
+        request_options = {}
+        if kwargs.get("visual_request_timeout_seconds") is not None:
+            request_options["timeout"] = kwargs["visual_request_timeout_seconds"]
         response = self._client.responses.create(
             model=self._model,
             tools=[IMAGE_PROCESS_TOOL],
@@ -130,6 +133,7 @@ class VisualImageConverter(DocumentConverter):
             },
             extra_headers={"ark-beta-image-process": "true"},
             extra_body={"thinking": {"type": "disabled"}},
+            **request_options,
         )
         result = _parse_visual_result(getattr(response, "output_text", None))
         return DocumentConverterResult(markdown=_render_markdown(result, metadata))
@@ -144,6 +148,18 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         )
     markitdown.register_converter(
         VisualImageConverter(client=client, model=model.strip()),
+        priority=-1,
+    )
+    from .pdf import VisualPdfConverter
+
+    markitdown.register_converter(
+        VisualPdfConverter(
+            client=client,
+            model=model.strip(),
+            item_timeout_seconds=kwargs.get("visual_item_timeout_seconds", 300),
+            job_deadline_seconds=kwargs.get("visual_job_deadline_seconds", 900),
+            max_concurrency=kwargs.get("visual_max_concurrency", 4),
+        ),
         priority=-1,
     )
 
