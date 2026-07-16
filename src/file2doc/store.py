@@ -513,16 +513,18 @@ class JobStore:
             now = _now()
             if not already_released:
                 release_requested_at = _iso(now)
+                release_expiry_candidates = [
+                    now
+                    + timedelta(seconds=self.visual_artifact_release_grace_seconds),
+                    _parse_iso(job["expires_at"]),
+                ]
+                release_expiry_candidates.extend(
+                    _parse_iso(artifacts[artifact_id]["expires_at"])
+                    for artifact_id in diagnostic_ids
+                )
+                release_expiry = min(release_expiry_candidates)
                 for artifact_id in diagnostic_ids:
                     artifact = artifacts[artifact_id]
-                    release_expiry = min(
-                        now
-                        + timedelta(
-                            seconds=self.visual_artifact_release_grace_seconds
-                        ),
-                        _parse_iso(job["expires_at"]),
-                        _parse_iso(artifact["expires_at"]),
-                    )
                     artifact["expires_at"] = _iso(release_expiry)
                     artifact["release_requested_at"] = release_requested_at
                 for media in manifest["media_index"]:
@@ -540,15 +542,15 @@ class JobStore:
                 self._write_json(manifest_path, manifest)
                 self._write_json(artifacts_path, artifacts)
 
-            release_expiries = {
-                artifacts[artifact_id]["expires_at"] for artifact_id in diagnostic_ids
-            }
+            release_expiries = sorted(
+                {artifacts[artifact_id]["expires_at"] for artifact_id in diagnostic_ids}
+            )
             return {
                 "job_id": job_id,
                 "released_count": len(diagnostic_ids),
                 "artifact_ids": diagnostic_ids,
                 "release_expires_at": (
-                    next(iter(release_expiries)) if len(release_expiries) == 1 else None
+                    release_expiries[0] if release_expiries else None
                 ),
                 "already_released": already_released,
             }

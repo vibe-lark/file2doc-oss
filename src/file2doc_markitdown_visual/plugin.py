@@ -20,6 +20,7 @@ from PIL import Image, UnidentifiedImageError
 
 logger = logging.getLogger("file2doc.visual")
 VISUAL_PROVIDER = "ark-responses"
+MAX_VISUAL_DIAGNOSTIC_BYTES = 20 * 1024 * 1024
 
 
 VISUAL_RESULT_SCHEMA = {
@@ -415,9 +416,11 @@ def _download_provider_image(url: str, *, timeout: float) -> tuple[str, bytes]:
             raise ValueError("provider image URL must use HTTPS")
         with urllib.request.urlopen(url, timeout=timeout) as response:
             media_type = response.headers.get_content_type()
-            content = response.read()
+            content = response.read(MAX_VISUAL_DIAGNOSTIC_BYTES + 1)
     if not content:
         raise ValueError("provider image result is empty")
+    if len(content) > MAX_VISUAL_DIAGNOSTIC_BYTES:
+        raise ValueError("provider image result exceeds the diagnostic size limit")
     try:
         with Image.open(io.BytesIO(content)) as image:
             image_format = (image.format or "").upper()
