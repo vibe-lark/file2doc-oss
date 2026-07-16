@@ -11,6 +11,7 @@ import io
 import re
 from operator import attrgetter
 from typing import Any, BinaryIO
+from uuid import uuid4
 
 import mammoth
 import pandas as pd
@@ -24,7 +25,6 @@ from openpyxl.utils import get_column_letter
 from .embedded import EmbeddedVisualParser, render_embedded_visual
 
 
-_DOCX_PLACEHOLDER = "FILE2DOCVISUALBLOCK{}"
 _DOCX_MIME_TYPE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 )
@@ -58,17 +58,22 @@ class VisualDocxConverter(HtmlConverter):
         stream_info: StreamInfo,
         **kwargs: Any,
     ) -> DocumentConverterResult:
+        visual_session = self._visual_parser.new_session()
         visual_blocks: list[str] = []
+        placeholder_prefix = f"FILE2DOCVISUAL-{uuid4().hex}-"
+        placeholders: list[str] = []
 
         def convert_image(image):
             with image.open() as image_stream:
-                result = self._visual_parser.parse(
+                result = visual_session.parse(
                     image_stream.read(),
                     content_type=image.content_type,
                 )
             location = f"DOCX image {len(visual_blocks) + 1}"
             visual_blocks.append(render_embedded_visual(result, location=location))
-            return {"src": _DOCX_PLACEHOLDER.format(len(visual_blocks) - 1)}
+            placeholder = f"{placeholder_prefix}{len(visual_blocks) - 1}"
+            placeholders.append(placeholder)
+            return {"src": placeholder}
 
         file_stream.seek(0)
         processed = pre_process_docx(file_stream)
@@ -77,18 +82,20 @@ class VisualDocxConverter(HtmlConverter):
             style_map=kwargs.get("style_map"),
             convert_image=mammoth.images.img_element(convert_image),
         ).value
-        html = _replace_docx_images_with_placeholders(html, len(visual_blocks))
+        html = _replace_docx_images_with_placeholders(html, placeholders)
         markdown = self._html_converter.convert_string(html, **kwargs).markdown
-        for index, block in enumerate(visual_blocks):
-            markdown = markdown.replace(_DOCX_PLACEHOLDER.format(index), block)
+        for placeholder, block in zip(placeholders, visual_blocks):
+            markdown = markdown.replace(placeholder, block, 1)
         return DocumentConverterResult(markdown=markdown)
 
 
-def _replace_docx_images_with_placeholders(html: str, count: int) -> str:
-    for index in range(count):
-        placeholder = _DOCX_PLACEHOLDER.format(index)
+def _replace_docx_images_with_placeholders(
+    html: str,
+    placeholders: list[str],
+) -> str:
+    for placeholder in placeholders:
         html = re.sub(
-            rf'<img\b[^>]*\bsrc=["\']{placeholder}["\'][^>]*>',
+            rf'<img\b[^>]*\bsrc=["\']{re.escape(placeholder)}["\'][^>]*>',
             f"<p>{placeholder}</p>",
             html,
             count=1,
@@ -119,6 +126,7 @@ class VisualPptxConverter(PptxConverter):
         stream_info: StreamInfo,
         **kwargs: Any,
     ) -> DocumentConverterResult:
+        visual_session = self._visual_parser.new_session()
         presentation = pptx.Presentation(file_stream)
         output: list[str] = []
 
@@ -128,7 +136,7 @@ class VisualPptxConverter(PptxConverter):
 
             def append_shape(shape) -> None:
                 if self._is_picture(shape):
-                    result = self._visual_parser.parse(
+                    result = visual_session.parse(
                         shape.image.blob,
                         content_type=shape.image.content_type,
                     )
@@ -187,6 +195,7 @@ class VisualXlsxConverter(HtmlConverter):
         stream_info: StreamInfo,
         **kwargs: Any,
     ) -> DocumentConverterResult:
+        visual_session = self._visual_parser.new_session()
         source = file_stream.read()
         workbook = load_workbook(io.BytesIO(source))
         sheets = pd.read_excel(
@@ -214,7 +223,7 @@ class VisualXlsxConverter(HtmlConverter):
             for _, image in images:
                 row, column = _xlsx_anchor_coordinates(image)
                 cell = f"{get_column_letter(column + 1)}{row + 1}"
-                result = self._visual_parser.parse(
+                result = visual_session.parse(
                     image._data(),
                     content_type=_xlsx_content_type(image),
                 )

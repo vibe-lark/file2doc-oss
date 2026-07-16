@@ -2,6 +2,7 @@ import io
 import json
 from types import SimpleNamespace
 
+import pytest
 from docx import Document
 from markitdown import MarkItDown, StreamInfo
 from openpyxl import Workbook
@@ -9,6 +10,8 @@ from openpyxl.drawing.image import Image as SpreadsheetImage
 from PIL import Image
 from pptx import Presentation
 from pptx.util import Inches
+
+from file2doc_markitdown_visual.embedded import EmbeddedVisualParser
 
 
 class _VisualClient:
@@ -83,6 +86,64 @@ def test_docx_reuses_visual_result_for_exact_duplicate_pixel_bytes():
     assert markdown.index("Between") < markdown.index("DOCX image 2")
     assert markdown.index("DOCX image 2") < markdown.index("Last")
     assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "extension",
+    [".docx", ".pptx", ".xlsx"],
+)
+def test_same_markitdown_instance_starts_fresh_cache_for_each_office_document(
+    extension,
+):
+    duplicate = _png_bytes()
+    document_builder = {
+        ".docx": _docx_with_images,
+        ".pptx": _pptx_with_images,
+        ".xlsx": _xlsx_with_images,
+    }[extension]
+    client = _VisualClient(
+        [
+            _visual_result(description="First document result."),
+            _visual_result(description="Second document result."),
+        ]
+    )
+    markitdown = MarkItDown(
+        enable_plugins=True,
+        visual_client=client,
+        visual_model="ep-visual",
+    )
+
+    first = markitdown.convert_stream(
+        document_builder([duplicate, duplicate]),
+        stream_info=StreamInfo(extension=extension),
+    ).markdown
+    second = markitdown.convert_stream(
+        document_builder([duplicate, duplicate]),
+        stream_info=StreamInfo(extension=extension),
+    ).markdown
+
+    assert first.count("First document result.") == 2
+    assert second.count("Second document result.") == 2
+    assert len(client.calls) == 2
+
+
+def test_docx_native_text_cannot_collide_with_generated_image_placeholder():
+    document = Document()
+    document.add_paragraph("FILE2DOCVISUALBLOCK0")
+    document.add_picture(io.BytesIO(_png_bytes()))
+    source = io.BytesIO()
+    document.save(source)
+    source.seek(0)
+
+    client = _VisualClient([_visual_result(description="Only the real image.")])
+    markdown = MarkItDown(
+        enable_plugins=True,
+        visual_client=client,
+        visual_model="ep-visual",
+    ).convert_stream(source, stream_info=StreamInfo(extension=".docx")).markdown
+
+    assert "FILE2DOCVISUALBLOCK0" in markdown
+    assert markdown.count("Only the real image.") == 1
 
 
 def test_docx_failed_image_is_an_explicit_warning_and_other_content_survives():
@@ -249,6 +310,39 @@ def test_xlsx_duplicate_images_across_sheets_share_one_visual_request():
     assert len(client.calls) == 1
 
 
+def test_gif_embedded_asset_is_normalized_to_png_before_visual_request():
+    document = Document()
+    document.add_picture(io.BytesIO(_gif_bytes()))
+    source = io.BytesIO()
+    document.save(source)
+    source.seek(0)
+
+    client = _VisualClient([_visual_result(description="Animated status icon.")])
+    markdown = MarkItDown(
+        enable_plugins=True,
+        visual_client=client,
+        visual_model="ep-visual",
+    ).convert_stream(source, stream_info=StreamInfo(extension=".docx")).markdown
+
+    image_url = client.calls[0]["input"][0]["content"][0]["image_url"]
+    assert image_url.startswith("data:image/png;base64,")
+    assert "Animated status icon." in markdown
+
+
+def test_vector_embedded_asset_returns_warning_without_calling_provider():
+    client = _VisualClient([])
+    parser = EmbeddedVisualParser(client=client, model="ep-visual")
+
+    result = parser.new_session().parse(
+        b'<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>',
+        content_type="image/svg+xml",
+    )
+
+    assert result.warning is not None
+    assert "unsupported non-raster" in result.warning.lower()
+    assert client.calls == []
+
+
 def _visual_result(*, description, visible_text=None):
     return {
         "description": description,
@@ -266,3 +360,50 @@ def _png_bytes(color=(32, 64, 192)):
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return buffer.getvalue()
+
+
+def _gif_bytes():
+    first = Image.new("RGB", (24, 16), color=(255, 0, 0))
+    second = Image.new("RGB", (24, 16), color=(0, 255, 0))
+    buffer = io.BytesIO()
+    first.save(buffer, format="GIF", save_all=True, append_images=[second])
+    return buffer.getvalue()
+
+
+def _docx_with_images(images):
+    document = Document()
+    for image_bytes in images:
+        document.add_picture(io.BytesIO(image_bytes))
+    source = io.BytesIO()
+    document.save(source)
+    source.seek(0)
+    return source
+
+
+def _pptx_with_images(images):
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, image_bytes in enumerate(images):
+        slide.shapes.add_picture(
+            io.BytesIO(image_bytes),
+            Inches(1),
+            Inches(1 + index * 2),
+        )
+    source = io.BytesIO()
+    presentation.save(source)
+    source.seek(0)
+    return source
+
+
+def _xlsx_with_images(images):
+    workbook = Workbook()
+    sheet = workbook.active
+    for index, image_bytes in enumerate(images, start=1):
+        sheet.add_image(
+            SpreadsheetImage(io.BytesIO(image_bytes)),
+            f"A{index}",
+        )
+    source = io.BytesIO()
+    workbook.save(source)
+    source.seek(0)
+    return source
