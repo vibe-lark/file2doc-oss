@@ -6,7 +6,9 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 import base64
+from email.message import Message
 import time
+import urllib.error
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -385,6 +387,85 @@ def test_unavailable_image_process_result_fails_without_markdown_fallback(tmp_pa
     assert client.get(f"/parse-jobs/{job['job_id']}/result").status_code == 409
 
 
+def test_image_process_result_rejects_private_network_url_before_download(
+    tmp_path, monkeypatch
+):
+    visual_client = _diagnostic_visual_client()
+    visual_client.result_url = (
+        "https://ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com/private.png"
+    )
+    network_called = False
+
+    def forbidden_network_call(*args, **kwargs):
+        nonlocal network_called
+        network_called = True
+        raise AssertionError("unsafe provider URL reached the network")
+
+    monkeypatch.setattr("urllib.request.build_opener", forbidden_network_call)
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *args, **kwargs: [(2, 1, 6, "", ("127.0.0.1", 443))],
+    )
+    job = _upload_with_visual_client(tmp_path, visual_client)
+
+    assert job["status"] == "failed"
+    assert "provider image host resolves to a non-public address" in job["error"]["message"]
+    assert network_called is False
+
+
+def test_image_process_result_rejects_unlisted_hostname_before_download(
+    tmp_path, monkeypatch
+):
+    visual_client = _diagnostic_visual_client()
+    visual_client.result_url = "https://untrusted.example.test/zoom.png"
+    network_called = False
+
+    def forbidden_network_call(*args, **kwargs):
+        nonlocal network_called
+        network_called = True
+        raise AssertionError("unlisted provider host reached the network")
+
+    monkeypatch.setattr("urllib.request.build_opener", forbidden_network_call)
+    job = _upload_with_visual_client(tmp_path, visual_client)
+
+    assert job["status"] == "failed"
+    assert "provider image host is not in the allowlist" in job["error"]["message"]
+    assert network_called is False
+
+
+def test_image_process_result_does_not_follow_redirects(tmp_path, monkeypatch):
+    visual_client = _diagnostic_visual_client()
+    visual_client.result_url = (
+        "https://ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com/zoom.png"
+    )
+    redirect_headers = Message()
+    redirect_headers["Location"] = "https://127.0.0.1/private.png"
+
+    def redirect_response(*args, **kwargs):
+        raise urllib.error.HTTPError(
+            visual_client.result_url,
+            302,
+            "Found",
+            redirect_headers,
+            None,
+        )
+
+    monkeypatch.setattr(
+        "urllib.request.build_opener",
+        lambda *handlers: SimpleNamespace(open=redirect_response),
+    )
+    monkeypatch.setattr(
+        "socket.getaddrinfo",
+        lambda *args, **kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+        ],
+    )
+    job = _upload_with_visual_client(tmp_path, visual_client)
+
+    assert job["status"] == "failed"
+    assert "provider image redirects are not allowed" in job["error"]["message"]
+
+
 def test_uploaded_instrument_photo_transcribes_only_illuminated_display_digits(
     tmp_path,
 ):
@@ -603,6 +684,41 @@ class _VisualClientWithImageProcessArtifact:
                 )
             ],
         )
+
+
+def _diagnostic_visual_client() -> _VisualClientWithImageProcessArtifact:
+    return _VisualClientWithImageProcessArtifact(
+        payload={
+            "description": "A diagnostic image.",
+            "visibleText": ["42"],
+            "candidateNumericValues": ["42"],
+            "layout": "Centered.",
+            "imageProcessActions": ["Zoom"],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        },
+        action="zoom",
+        result_bytes=_png_bytes(),
+    )
+
+
+def _upload_with_visual_client(tmp_path, visual_client) -> dict:
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+            ),
+        )
+    )
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("display.png", _png_bytes(), "image/png")},
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    return client.get(created["poll_url"]).json()
 
 
 class _DisplayReadingResponsesClient:

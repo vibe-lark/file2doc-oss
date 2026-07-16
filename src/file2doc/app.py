@@ -118,6 +118,9 @@ def create_app(
             "visual_artifact_release_grace_seconds": (
                 capability_parse_options.visual_artifact_release_grace_seconds
             ),
+            "visual_artifact_allowed_hosts": list(
+                capability_parse_options.visual_artifact_allowed_hosts
+            ),
             "page_image_dpi_options": sorted(ALLOWED_PAGE_IMAGE_DPI),
             "page_image_dpi_default": AGENT_PAGE_IMAGE_DPI,
         }

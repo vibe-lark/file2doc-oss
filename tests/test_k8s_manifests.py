@@ -97,6 +97,10 @@ def test_k8s_manifests_define_cpu_only_file2doc_deployment() -> None:
             "value": "300",
         },
         {
+            "name": "FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS",
+            "value": "ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com",
+        },
+        {
             "name": "FILE2DOC_LOCAL_ASR_MODEL_DIR",
             "value": "/data/file2doc/models/sherpa-paraformer-zh",
         },

@@ -9,6 +9,7 @@ from PIL import Image, UnidentifiedImageError
 
 from .plugin import (
     VisualArtifactCollector,
+    DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
     VisualExecutionConfig,
     VisualExecutionPolicy,
     VisualImageConverter,
@@ -33,6 +34,7 @@ class EmbeddedVisualParser:
         execution_policy: VisualExecutionPolicy | None = None,
         execution_config: VisualExecutionConfig | None = None,
         artifact_collector: VisualArtifactCollector | None = None,
+        artifact_allowed_hosts: tuple[str, ...] = DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
     ) -> None:
         self._client = client
         self._model = model
@@ -40,6 +42,7 @@ class EmbeddedVisualParser:
         self._execution_policy = execution_policy
         self._execution_config = execution_config or VisualExecutionConfig()
         self._artifact_collector = artifact_collector
+        self._artifact_allowed_hosts = artifact_allowed_hosts
 
     def new_session(self) -> "EmbeddedVisualSession":
         return EmbeddedVisualSession(
@@ -50,6 +53,7 @@ class EmbeddedVisualParser:
                 self._execution_policy or self._execution_config.create_policy()
             ),
             artifact_collector=self._artifact_collector,
+            artifact_allowed_hosts=self._artifact_allowed_hosts,
         )
 
 
@@ -64,12 +68,14 @@ class EmbeddedVisualSession:
         exiftool_path: str | None,
         execution_policy: VisualExecutionPolicy | None = None,
         artifact_collector: VisualArtifactCollector | None = None,
+        artifact_allowed_hosts: tuple[str, ...] = DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
     ) -> None:
         self._converter = VisualImageConverter(
             client=client,
             model=model,
             execution_policy=execution_policy,
             artifact_collector=artifact_collector,
+            artifact_allowed_hosts=artifact_allowed_hosts,
         )
         self._exiftool_path = exiftool_path
         self._cache: dict[str, EmbeddedVisualResult] = {}

@@ -18,6 +18,10 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
     monkeypatch.setenv("FILE2DOC_VISUAL_MAX_CONCURRENCY", "3")
     monkeypatch.setenv("FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS", "1200")
     monkeypatch.setenv("FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS", "45")
+    monkeypatch.setenv(
+        "FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS",
+        "ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com,visual.example.test",
+    )
     client = TestClient(
         create_app(
             storage_root=tmp_path / "storage",
@@ -44,6 +48,10 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
         "visual_max_concurrency": 3,
         "visual_artifact_ttl_seconds": 1200,
         "visual_artifact_release_grace_seconds": 45,
+        "visual_artifact_allowed_hosts": [
+            "ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com",
+            "visual.example.test",
+        ],
         "page_image_dpi_options": [144, 216, 288],
         "page_image_dpi_default": 144,
     }

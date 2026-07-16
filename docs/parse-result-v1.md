@@ -270,7 +270,7 @@ Draft owners release these diagnostics after confirm, cancel, or draft expiry:
 POST /parse-jobs/{job_id}/diagnostics/release
 ```
 
-The endpoint is idempotent and returns `job_id`, `released_count`, `artifact_ids`, `release_expires_at`, and `already_released`. Release shortens each diagnostic expiry to the configured grace window without changing source or content artifacts. Cleanup deletes expired diagnostic bytes but keeps manifest tombstones with `availability=expired` and `expired_at`; later artifact downloads return `410 artifact_expired`. A provider action whose returned image cannot be retained fails that visual item explicitly and does not fall back to Markdown-only acceptance.
+The endpoint is idempotent and returns `job_id`, `released_count`, `artifact_ids`, `release_expires_at`, and `already_released`. Release shortens each diagnostic expiry to the configured grace window without changing source or content artifacts. Cleanup deletes expired diagnostic bytes but keeps manifest tombstones with `availability=expired` and `expired_at`; later artifact downloads return `410 artifact_expired`. Provider image URLs must use an explicitly allowed HTTPS hostname, resolve only to public addresses, and may not redirect. A provider action whose returned image cannot be retained fails that visual item explicitly and does not fall back to Markdown-only acceptance.
 
 ## Manifest Skeleton
 
