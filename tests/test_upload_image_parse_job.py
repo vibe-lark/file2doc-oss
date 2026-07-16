@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -10,6 +11,11 @@ import pytest
 
 from file2doc.app import create_app
 from file2doc.parsers import ParseOptions
+
+
+REAL_DISPLAY_FIXTURE = (
+    Path(__file__).parent / "fixtures" / "TBEVA-40-S7-display.jpg"
+)
 
 
 @pytest.mark.parametrize(
@@ -72,7 +78,7 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     manifest = client.get(job["result"]["manifest_url"]).json()
     assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
     assert manifest["parser"]["markitdown_version"] == "0.1.2"
-    assert manifest["parser"]["visual_plugin_version"] == "0.2.0"
+    assert manifest["parser"]["visual_plugin_version"] == "0.2.1"
     source_media = next(
         item for item in manifest["media_index"] if item["kind"] == "source_image"
     )
@@ -83,6 +89,45 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     )
     assert source_artifact.content == image_bytes
     assert source_artifact.headers["content-type"] == expected_media_type
+
+
+def test_uploaded_instrument_photo_transcribes_only_illuminated_display_digits(
+    tmp_path,
+):
+    """The visual contract must distinguish lit digits from dark display slots."""
+    visual_client = _DisplayReadingResponsesClient()
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+            ),
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={
+            "file": (
+                REAL_DISPLAY_FIXTURE.name,
+                REAL_DISPLAY_FIXTURE.read_bytes(),
+                "image/jpeg",
+            )
+        },
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "completed"
+    content = client.get(job["result"]["content_url"]).text
+    markdown_lines = set(content.splitlines())
+    assert "- P 47.1" in markdown_lines
+    assert "- 47.1" in markdown_lines
+    assert "- P 847.1" not in markdown_lines
+    assert "- 847.1" not in markdown_lines
+    assert "- H 88.52" in markdown_lines
 
 
 def test_uploaded_jpeg_with_parser_warning_completes_with_warnings(tmp_path):
@@ -238,6 +283,43 @@ class _CapturingResponses:
 class _VisualClient:
     def __init__(self, payload: dict) -> None:
         self.responses = _CapturingResponses(payload)
+
+
+class _DisplayReadingResponsesClient:
+    """Boundary simulator for the real Ark display-reading failure mode."""
+
+    def __init__(self) -> None:
+        self.responses = self
+        self.calls: list[dict] = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        prompt = kwargs["input"][0]["content"][1]["text"]
+        verifies_active_segments = all(
+            requirement in prompt.lower()
+            for requirement in (
+                "unilluminated segment outlines",
+                "physical digit positions",
+                "only the illuminated characters",
+            )
+        )
+        reading = "P 47.1" if verifies_active_segments else "P 847.1"
+        return SimpleNamespace(
+            output_text=json.dumps(
+                {
+                    "description": "A transmittance and haze instrument display.",
+                    "visibleText": [reading, "H 88.52"],
+                    "candidateNumericValues": [
+                        reading.removeprefix("P "),
+                        "88.52",
+                    ],
+                    "layout": "P is left of H on the illuminated display.",
+                    "imageProcessActions": [],
+                    "imageProcessWarnings": [],
+                    "warnings": [],
+                }
+            )
+        )
 
 
 class _RawResponses:

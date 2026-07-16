@@ -6,7 +6,7 @@
     "component": {
       "type": "library",
       "name": "file2doc-markitdown-visual",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "properties": [
         {
           "name": "file2doc:distribution-mode",
