@@ -16,6 +16,8 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
     monkeypatch.setenv("FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS", "17")
     monkeypatch.setenv("FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS", "61")
     monkeypatch.setenv("FILE2DOC_VISUAL_MAX_CONCURRENCY", "3")
+    monkeypatch.setenv("FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS", "1200")
+    monkeypatch.setenv("FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS", "45")
     client = TestClient(
         create_app(
             storage_root=tmp_path / "storage",
@@ -40,6 +42,8 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
         "visual_item_timeout_seconds": 17,
         "visual_job_deadline_seconds": 61,
         "visual_max_concurrency": 3,
+        "visual_artifact_ttl_seconds": 1200,
+        "visual_artifact_release_grace_seconds": 45,
         "page_image_dpi_options": [144, 216, 288],
         "page_image_dpi_default": 144,
     }

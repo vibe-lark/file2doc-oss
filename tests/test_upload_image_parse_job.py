@@ -130,6 +130,10 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     source_media = next(
         item for item in manifest["media_index"] if item["kind"] == "source_image"
     )
+    assert not any(
+        item["kind"].startswith("image_process_")
+        for item in manifest["media_index"]
+    )
     assert source_media["media_type"] == expected_media_type
 
     source_artifact = client.get(
@@ -340,6 +344,45 @@ def test_cleanup_expires_only_visual_diagnostics_and_keeps_tombstone(tmp_path):
     assert client.get(
         f"/parse-jobs/{job['job_id']}/artifacts/{source['artifact_id']}"
     ).status_code == 200
+
+
+def test_unavailable_image_process_result_fails_without_markdown_fallback(tmp_path):
+    visual_client = _VisualClientWithImageProcessArtifact(
+        payload={
+            "description": "This must not be accepted without its Zoom evidence.",
+            "visibleText": ["42"],
+            "candidateNumericValues": ["42"],
+            "layout": "Centered.",
+            "imageProcessActions": ["Zoom"],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        },
+        action="zoom",
+        result_bytes=_png_bytes(),
+    )
+    visual_client.result_url = "http://provider.example.test/zoom.png"
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=visual_client,
+                visual_model="fake-vision",
+            ),
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("display.png", _png_bytes(), "image/png")},
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "failed"
+    assert job["error"]["code"] == "visual_item_failed"
+    assert "Image Process zoom result could not be retained" in job["error"]["message"]
+    assert client.get(f"/parse-jobs/{job['job_id']}/result").status_code == 409
 
 
 def test_uploaded_instrument_photo_transcribes_only_illuminated_display_digits(

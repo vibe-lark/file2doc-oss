@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import locale
 import logging
@@ -14,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
+from PIL import Image, UnidentifiedImageError
 
 
 logger = logging.getLogger("file2doc.visual")
@@ -416,9 +418,27 @@ def _download_provider_image(url: str, *, timeout: float) -> tuple[str, bytes]:
             content = response.read()
     if not content:
         raise ValueError("provider image result is empty")
-    if media_type not in {"image/png", "image/jpeg"}:
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            image_format = (image.format or "").upper()
+            image.verify()
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        raise ValueError("provider image result is not a valid raster image") from error
+    detected_media_type = {
+        "PNG": "image/png",
+        "JPEG": "image/jpeg",
+        "JPG": "image/jpeg",
+    }.get(image_format)
+    if detected_media_type is None:
+        raise ValueError(f"unsupported provider image format: {image_format or 'unknown'}")
+    if media_type not in {
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "application/octet-stream",
+    }:
         raise ValueError(f"unsupported provider image media type: {media_type}")
-    return media_type, content
+    return detected_media_type, content
 
 
 def _parse_visual_result(output_text: Any) -> dict[str, Any]:

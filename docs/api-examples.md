@@ -277,6 +277,21 @@ In package terms, targeted media retrieval is the `artifacts/media_index` flow:
 use the manifest's `media_index` to choose the asset, then use the corresponding
 entry in the `artifacts` array for path, kind, and media type if needed.
 
+Image Process Zoom/Rotate results may also appear in `media_index` as short-lived
+diagnostic-only items. A Structured Workflow Draft may download them through the
+same artifact endpoint while `availability=available`. On confirm, cancel, or
+draft expiry, release their diagnostic window:
+
+```bash
+curl -sS -X POST \
+  "$BASE_URL/parse-jobs/job_abc123/diagnostics/release" \
+  "${AUTH_HEADER[@]}"
+```
+
+Repeated release calls are safe and do not extend the first release window.
+After cleanup, the manifest retains an expired tombstone and the artifact
+endpoint returns `410 artifact_expired`.
+
 ## Download The Optional Zip Package
 
 ```bash

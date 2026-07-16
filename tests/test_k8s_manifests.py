@@ -91,6 +91,11 @@ def test_k8s_manifests_define_cpu_only_file2doc_deployment() -> None:
         {"name": "FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS", "value": "300"},
         {"name": "FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS", "value": "900"},
         {"name": "FILE2DOC_VISUAL_MAX_CONCURRENCY", "value": "4"},
+        {"name": "FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS", "value": "3600"},
+        {
+            "name": "FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS",
+            "value": "300",
+        },
         {
             "name": "FILE2DOC_LOCAL_ASR_MODEL_DIR",
             "value": "/data/file2doc/models/sherpa-paraformer-zh",
