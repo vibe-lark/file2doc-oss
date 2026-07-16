@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager, suppress
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -24,6 +26,9 @@ from file2doc.rendering import AGENT_PAGE_IMAGE_DPI, ALLOWED_PAGE_IMAGE_DPI
 from file2doc.store import JobStore
 
 
+retention_logger = logging.getLogger("file2doc.retention")
+
+
 def create_app(
     *,
     storage_root: str | Path = "/data/file2doc",
@@ -32,6 +37,7 @@ def create_app(
     audio_parse_options: AudioParseOptions | None = None,
     parse_options: ParseOptions | None = None,
     video_frame_extractor=None,
+    diagnostic_cleanup_interval_seconds: float | None = None,
 ) -> FastAPI:
     root = Path(storage_root)
     capability_parse_options = parse_options or ParseOptions.from_env()
@@ -47,7 +53,30 @@ def create_app(
             capability_parse_options.visual_artifact_release_grace_seconds
         ),
     )
-    app = FastAPI(title="File2Doc", version="0.1.0")
+    cleanup_interval_seconds = _configured_diagnostic_cleanup_interval_seconds(
+        diagnostic_cleanup_interval_seconds
+    )
+
+    async def _cleanup_expired_loop() -> None:
+        while True:
+            await asyncio.sleep(cleanup_interval_seconds)
+            try:
+                await asyncio.to_thread(store.cleanup_expired_visual_diagnostics)
+            except Exception:
+                retention_logger.exception("Automatic retention cleanup failed")
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI):
+        cleanup_task = asyncio.create_task(_cleanup_expired_loop())
+        application.state.file2doc_diagnostic_cleanup_task = cleanup_task
+        try:
+            yield
+        finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
+
+    app = FastAPI(title="File2Doc", version="0.1.0", lifespan=lifespan)
     app.state.file2doc_background_tasks = set()
     job_semaphore = asyncio.Semaphore(_configured_max_concurrent_jobs())
 
@@ -118,6 +147,7 @@ def create_app(
             "visual_artifact_release_grace_seconds": (
                 capability_parse_options.visual_artifact_release_grace_seconds
             ),
+            "diagnostic_cleanup_interval_seconds": cleanup_interval_seconds,
             "visual_artifact_allowed_hosts": list(
                 capability_parse_options.visual_artifact_allowed_hosts
             ),
@@ -265,6 +295,19 @@ def _configured_asr_model_dir(options: AudioParseOptions | None) -> Path | None:
     if not configured:
         return None
     return Path(configured)
+
+
+def _configured_diagnostic_cleanup_interval_seconds(
+    configured: float | None,
+) -> float:
+    value = (
+        configured
+        if configured is not None
+        else float(os.getenv("FILE2DOC_DIAGNOSTIC_CLEANUP_INTERVAL_SECONDS", "60"))
+    )
+    if value <= 0:
+        raise ValueError("diagnostic cleanup interval must be greater than zero")
+    return value
 
 
 def _local_asr_model_present(model_dir: Path | None) -> bool:

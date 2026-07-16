@@ -18,6 +18,7 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
     monkeypatch.setenv("FILE2DOC_VISUAL_MAX_CONCURRENCY", "3")
     monkeypatch.setenv("FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS", "1200")
     monkeypatch.setenv("FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS", "45")
+    monkeypatch.setenv("FILE2DOC_DIAGNOSTIC_CLEANUP_INTERVAL_SECONDS", "17")
     monkeypatch.setenv(
         "FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS",
         "ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com,visual.example.test",
@@ -48,6 +49,7 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
         "visual_max_concurrency": 3,
         "visual_artifact_ttl_seconds": 1200,
         "visual_artifact_release_grace_seconds": 45,
+        "diagnostic_cleanup_interval_seconds": 17,
         "visual_artifact_allowed_hosts": [
             "ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com",
             "visual.example.test",
@@ -66,6 +68,20 @@ def test_healthz_is_public_and_returns_service_status(tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "file2doc"}
+
+
+def test_shutdown_cancels_automatic_retention_cleanup(tmp_path):
+    app = create_app(
+        storage_root=tmp_path,
+        auth_enabled=False,
+        diagnostic_cleanup_interval_seconds=60,
+    )
+
+    with TestClient(app):
+        cleanup_task = app.state.file2doc_diagnostic_cleanup_task
+        assert not cleanup_task.done()
+
+    assert cleanup_task.cancelled()
 
 
 def test_readyz_is_public_and_checks_storage_and_sqlite(tmp_path, monkeypatch):

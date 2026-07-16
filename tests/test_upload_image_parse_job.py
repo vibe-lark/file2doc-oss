@@ -9,6 +9,7 @@ import base64
 from email.message import Message
 import time
 import urllib.error
+from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -277,6 +278,185 @@ def test_releasing_diagnostics_shortens_only_derived_artifact_lifetime(tmp_path)
     assert diagnostic_after["release_requested_at"]
     assert source_after == source_before
     assert client.get(job["result"]["content_url"]).status_code == 200
+
+
+def test_released_diagnostic_cannot_be_downloaded_through_result_package(tmp_path):
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            parse_options=ParseOptions(
+                visual_client=_diagnostic_visual_client(),
+                visual_model="fake-vision",
+                visual_artifact_ttl_seconds=3600,
+                visual_artifact_release_grace_seconds=0.01,
+            ),
+        )
+    )
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("display.png", _png_bytes(), "image/png")},
+        data={"parser_profile": "agent", "retention": "short"},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+    manifest = client.get(job["result"]["manifest_url"]).json()
+    diagnostic = next(
+        item
+        for item in manifest["media_index"]
+        if item.get("attachment_role") == "diagnostic_only"
+    )
+    source = next(
+        item for item in manifest["media_index"] if item["kind"] == "source_image"
+    )
+
+    assert client.post(
+        f"/parse-jobs/{job['job_id']}/diagnostics/release"
+    ).status_code == 200
+    time.sleep(0.03)
+
+    package_response = client.get(job["result"]["package_url"])
+
+    assert package_response.status_code == 200
+    with ZipFile(io.BytesIO(package_response.content)) as package:
+        assert diagnostic["path"] not in package.namelist()
+        assert package.read("content.md")
+    expired = client.get(
+        f"/parse-jobs/{job['job_id']}/artifacts/{diagnostic['artifact_id']}"
+    )
+    assert expired.status_code == 410
+    assert expired.json()["detail"]["code"] == "artifact_expired"
+    assert client.get(job["result"]["content_url"]).status_code == 200
+    assert client.get(
+        f"/parse-jobs/{job['job_id']}/artifacts/{source['artifact_id']}"
+    ).status_code == 200
+
+
+def test_runtime_automatically_tombstones_expired_diagnostics(tmp_path):
+    app = create_app(
+        storage_root=tmp_path,
+        auth_enabled=False,
+        parse_options=ParseOptions(
+            visual_client=_diagnostic_visual_client(),
+            visual_model="fake-vision",
+            visual_artifact_ttl_seconds=3600,
+            visual_artifact_release_grace_seconds=0.01,
+        ),
+        diagnostic_cleanup_interval_seconds=0.01,
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/parse-jobs/upload",
+            files={"file": ("display.png", _png_bytes(), "image/png")},
+            data={"parser_profile": "agent", "retention": "short"},
+        ).json()
+        deadline = time.monotonic() + 1
+        while True:
+            job = client.get(created["poll_url"]).json()
+            if job["status"] in {"completed", "completed_with_warnings"}:
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        manifest = client.get(job["result"]["manifest_url"]).json()
+        diagnostic = next(
+            item
+            for item in manifest["media_index"]
+            if item.get("attachment_role") == "diagnostic_only"
+        )
+        source = next(
+            item for item in manifest["media_index"] if item["kind"] == "source_image"
+        )
+        assert client.post(
+            f"/parse-jobs/{job['job_id']}/diagnostics/release"
+        ).status_code == 200
+
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            current_manifest = client.get(job["result"]["manifest_url"]).json()
+            current_diagnostic = next(
+                item
+                for item in current_manifest["media_index"]
+                if item["artifact_id"] == diagnostic["artifact_id"]
+            )
+            if current_diagnostic.get("availability") == "expired":
+                break
+            time.sleep(0.01)
+
+        assert current_diagnostic["availability"] == "expired"
+        assert current_diagnostic["expired_at"]
+        assert not (
+            tmp_path
+            / "jobs"
+            / job["job_id"]
+            / "result-package"
+            / diagnostic["path"]
+        ).exists()
+        assert client.get(
+            f"/parse-jobs/{job['job_id']}/artifacts/{diagnostic['artifact_id']}"
+        ).status_code == 410
+        package_response = client.get(job["result"]["package_url"])
+        with ZipFile(io.BytesIO(package_response.content)) as package:
+            assert diagnostic["path"] not in package.namelist()
+            assert package.read("content.md")
+        assert client.get(job["result"]["content_url"]).status_code == 200
+        assert client.get(
+            f"/parse-jobs/{job['job_id']}/artifacts/{source['artifact_id']}"
+        ).status_code == 200
+
+
+def test_expired_diagnostic_get_updates_public_tombstone_before_scheduled_cleanup(
+    tmp_path,
+):
+    app = create_app(
+        storage_root=tmp_path,
+        auth_enabled=False,
+        parse_options=ParseOptions(
+            visual_client=_diagnostic_visual_client(),
+            visual_model="fake-vision",
+            visual_artifact_ttl_seconds=0.01,
+        ),
+        diagnostic_cleanup_interval_seconds=60,
+    )
+    with TestClient(app) as client:
+        created = client.post(
+            "/parse-jobs/upload",
+            files={"file": ("display.png", _png_bytes(), "image/png")},
+            data={"parser_profile": "agent", "retention": "short"},
+        ).json()
+        deadline = time.monotonic() + 1
+        while True:
+            job = client.get(created["poll_url"]).json()
+            if job["status"] in {"completed", "completed_with_warnings"}:
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+        manifest = client.get(job["result"]["manifest_url"]).json()
+        diagnostic = next(
+            item
+            for item in manifest["media_index"]
+            if item.get("attachment_role") == "diagnostic_only"
+        )
+        time.sleep(0.03)
+
+        expired = client.get(
+            f"/parse-jobs/{job['job_id']}/artifacts/{diagnostic['artifact_id']}"
+        )
+
+        assert expired.status_code == 410
+        after = client.get(job["result"]["manifest_url"]).json()
+        tombstone = next(
+            item
+            for item in after["media_index"]
+            if item["artifact_id"] == diagnostic["artifact_id"]
+        )
+        assert tombstone["availability"] == "expired"
+        assert tombstone["expired_at"]
+        assert not (
+            tmp_path
+            / "jobs"
+            / job["job_id"]
+            / "result-package"
+            / diagnostic["path"]
+        ).exists()
 
 
 def test_cleanup_expires_only_visual_diagnostics_and_keeps_tombstone(tmp_path):
