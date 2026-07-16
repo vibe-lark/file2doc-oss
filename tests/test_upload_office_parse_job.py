@@ -150,7 +150,7 @@ def test_uploaded_docx_produces_non_empty_markitdown_markdown(tmp_path):
     assert manifest["content"]["artifact_id"] == job["result"]["content_artifact_id"]
     assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
     assert manifest["parser"]["version"]
-    assert manifest["parser"]["visual_plugin_version"] == "0.2.1"
+    assert manifest["parser"]["visual_plugin_version"] == "0.3.0"
 
     content_response = client.get(job["result"]["content_url"])
     assert content_response.status_code == 200
@@ -208,7 +208,7 @@ def test_uploaded_xlsx_produces_non_empty_markitdown_markdown(tmp_path):
     assert manifest["content"]["artifact_id"] == job["result"]["content_artifact_id"]
     assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
     assert manifest["parser"]["version"]
-    assert manifest["parser"]["visual_plugin_version"] == "0.2.1"
+    assert manifest["parser"]["visual_plugin_version"] == "0.3.0"
 
     content_response = client.get(job["result"]["content_url"])
     assert content_response.status_code == 200

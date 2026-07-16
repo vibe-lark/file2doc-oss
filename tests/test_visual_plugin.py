@@ -40,7 +40,7 @@ def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
 
     assert plugin.value == "file2doc_markitdown_visual"
     assert version("markitdown") == "0.1.2"
-    assert __version__ == "0.2.1"
+    assert __version__ == "0.3.0"
     metadata = package_metadata()
     assert metadata["name"] == "file2doc-markitdown-visual"
     assert metadata["distributionMode"] == "embedded-package-in-file2doc-wheel"
@@ -71,7 +71,7 @@ def test_visual_plugin_installation_is_pinned_and_official_ocr_is_absent():
             Path(__file__).parents[1] / "src/file2doc_markitdown_visual/sbom.cdx.json"
         ).read_text(encoding="utf-8")
     )
-    assert sbom["metadata"]["component"]["version"] == "0.2.1"
+    assert sbom["metadata"]["component"]["version"] == "0.3.0"
     assert {component["name"] for component in sbom["components"]} >= {
         "markitdown",
         "pdfplumber",
