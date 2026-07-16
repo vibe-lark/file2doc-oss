@@ -10,6 +10,11 @@ from typing import Any, Callable
 from markitdown import MarkItDown
 
 from file2doc_markitdown_visual import __version__ as visual_plugin_version
+from file2doc_markitdown_visual.plugin import (
+    DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
+    VisualArtifactCollector,
+    VisualDiagnosticArtifact,
+)
 
 
 @dataclass(frozen=True)
@@ -17,6 +22,7 @@ class ParsedContent:
     markdown: str
     diagnostics: dict
     warnings: list[dict] = field(default_factory=list)
+    visual_artifacts: tuple[VisualDiagnosticArtifact, ...] = ()
 
 
 class ParseFailure(Exception):
@@ -38,6 +44,11 @@ class ParseOptions:
     visual_item_timeout_seconds: float = 300
     visual_job_deadline_seconds: float = 900
     visual_max_concurrency: int = 4
+    visual_artifact_ttl_seconds: float = 3600
+    visual_artifact_release_grace_seconds: float = 300
+    visual_artifact_allowed_hosts: tuple[str, ...] = (
+        DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS
+    )
 
     @classmethod
     def from_env(cls) -> "ParseOptions":
@@ -54,6 +65,16 @@ class ParseOptions:
             ),
             visual_max_concurrency=_env_int(
                 "FILE2DOC_VISUAL_MAX_CONCURRENCY", 4
+            ),
+            visual_artifact_ttl_seconds=_env_float(
+                "FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS", 3600
+            ),
+            visual_artifact_release_grace_seconds=_env_float(
+                "FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS", 300
+            ),
+            visual_artifact_allowed_hosts=_env_hosts(
+                "FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS",
+                DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
             ),
         )
 
@@ -158,6 +179,7 @@ def _parse_with_visual_plugin(
         )
 
     try:
+        artifact_collector = VisualArtifactCollector()
         result = MarkItDown(
             enable_builtins=False,
             enable_plugins=True,
@@ -166,6 +188,8 @@ def _parse_with_visual_plugin(
             visual_item_timeout_seconds=options.visual_item_timeout_seconds,
             visual_job_deadline_seconds=options.visual_job_deadline_seconds,
             visual_max_concurrency=options.visual_max_concurrency,
+            visual_artifact_collector=artifact_collector,
+            visual_artifact_allowed_hosts=options.visual_artifact_allowed_hosts,
         ).convert(source_path)
         content = result.text_content.strip()
     except Exception as error:  # MarkItDown wraps converter failures by design.
@@ -196,6 +220,7 @@ def _parse_with_visual_plugin(
             visual_provider="ark-responses",
         ),
         warnings=_warnings_from_markdown(markdown),
+        visual_artifacts=artifact_collector.artifacts,
     )
 def _diagnostics(
     *,
@@ -292,3 +317,17 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _env_hosts(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    configured = os.getenv(name)
+    if configured is None:
+        return default
+    hosts = tuple(
+        dict.fromkeys(
+            host.strip().lower().rstrip(".")
+            for host in configured.split(",")
+            if host.strip()
+        )
+    )
+    return hosts or default

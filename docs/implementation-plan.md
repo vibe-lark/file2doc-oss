@@ -57,7 +57,7 @@ This plan turns the File2Doc v1 contract into a PDF tracer bullet.
 - Treat complete MarkItDown failure as job failure.
 - Allow `completed_with_warnings` when some visual items fail but usable native or visual Markdown exists.
 - Do not write API keys or visual-provider request payloads to logs, manifests, parser artifacts, or diagnostics.
-- Configure Visual Parsing only through `FILE2DOC_VISUAL_MODEL`, `FILE2DOC_VISUAL_API_KEY`, `FILE2DOC_VISUAL_BASE_URL`, `FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS`, `FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS`, and `FILE2DOC_VISUAL_MAX_CONCURRENCY`. The retired `FILE2DOC_OCR_*` names are not aliases.
+- Configure Visual Parsing only through `FILE2DOC_VISUAL_MODEL`, `FILE2DOC_VISUAL_API_KEY`, `FILE2DOC_VISUAL_BASE_URL`, `FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS`, `FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS`, `FILE2DOC_VISUAL_MAX_CONCURRENCY`, `FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS`, `FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS`, and `FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS`. The retired `FILE2DOC_OCR_*` names are not aliases.
 
 ## 4a. Audio and Video Parser
 

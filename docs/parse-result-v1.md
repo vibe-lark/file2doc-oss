@@ -262,6 +262,16 @@ result-package/
 
 Parser-native outputs may be retained under `parser_artifacts/` for debugging and future remapping, but they are not the downstream contract. Downstream agents should consume `content.md` and the standard manifest indexes by default.
 
+Image Process Zoom/Rotate outputs returned by the visual provider are a narrow exception: File2Doc downloads the actual provider result into `diagnostics/image-process/` and registers it in both `media_index` and `artifacts`. These entries use `kind=image_process_zoom_result` or `kind=image_process_rotate_result`, identify the exact visual input through `source_ref`, and carry `lifecycle=structured_workflow_draft`, `attachment_role=diagnostic_only`, `expires_at`, and `availability`. They are evidence for reviewing a Structured Workflow Draft, not source files or business attachments, and their paths never appear in Content Markdown. If the provider returns no derived image, File2Doc does not create one.
+
+Draft owners release these diagnostics after confirm, cancel, or draft expiry:
+
+```http
+POST /parse-jobs/{job_id}/diagnostics/release
+```
+
+The endpoint is idempotent and returns `job_id`, `released_count`, `artifact_ids`, `release_expires_at`, and `already_released`. Release shortens each diagnostic expiry to the configured grace window without changing source or content artifacts. Cleanup deletes expired diagnostic bytes but keeps manifest tombstones with `availability=expired` and `expired_at`; later artifact downloads return `410 artifact_expired`. Provider image URLs must use an explicitly allowed HTTPS hostname, resolve only to public addresses, and may not redirect. A provider action whose returned image cannot be retained fails that visual item explicitly and does not fall back to Markdown-only acceptance.
+
 ## Manifest Skeleton
 
 ```json

@@ -22,6 +22,9 @@ The deployment runs one `file2doc` container with:
 - `FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS=300`
 - `FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS=900`
 - `FILE2DOC_VISUAL_MAX_CONCURRENCY=4`
+- `FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS=3600`
+- `FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS=300`
+- `FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS=ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com`
 - `FILE2DOC_BEARER_TOKEN` loaded from the `file2doc-secret` Kubernetes Secret
 - a PVC named `file2doc-data` mounted at `/data/file2doc`
 - HTTP readiness and liveness probes for `/readyz` and `/healthz`

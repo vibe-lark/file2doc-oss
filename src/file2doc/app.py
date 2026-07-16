@@ -40,6 +40,12 @@ def create_app(
         audio_parse_options=audio_parse_options,
         parse_options=parse_options,
         video_frame_extractor=video_frame_extractor,
+        visual_artifact_ttl_seconds=(
+            capability_parse_options.visual_artifact_ttl_seconds
+        ),
+        visual_artifact_release_grace_seconds=(
+            capability_parse_options.visual_artifact_release_grace_seconds
+        ),
     )
     app = FastAPI(title="File2Doc", version="0.1.0")
     app.state.file2doc_background_tasks = set()
@@ -106,6 +112,15 @@ def create_app(
                 capability_parse_options.visual_job_deadline_seconds
             ),
             "visual_max_concurrency": capability_parse_options.visual_max_concurrency,
+            "visual_artifact_ttl_seconds": (
+                capability_parse_options.visual_artifact_ttl_seconds
+            ),
+            "visual_artifact_release_grace_seconds": (
+                capability_parse_options.visual_artifact_release_grace_seconds
+            ),
+            "visual_artifact_allowed_hosts": list(
+                capability_parse_options.visual_artifact_allowed_hosts
+            ),
             "page_image_dpi_options": sorted(ALLOWED_PAGE_IMAGE_DPI),
             "page_image_dpi_default": AGENT_PAGE_IMAGE_DPI,
         }
@@ -172,6 +187,13 @@ def create_app(
             media_type=artifact["media_type"],
             filename=Path(artifact["path"]).name,
         )
+
+    @app.post(
+        "/parse-jobs/{job_id}/diagnostics/release",
+        dependencies=[Depends(require_auth)],
+    )
+    async def release_visual_diagnostics(job_id: str) -> dict:
+        return store.release_visual_diagnostics(job_id)
 
     @app.get("/parse-jobs/{job_id}/package", dependencies=[Depends(require_auth)])
     async def get_package(job_id: str) -> FileResponse:

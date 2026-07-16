@@ -14,6 +14,8 @@ from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
 from .plugin import (
     VisualExecutionConfig,
     VisualExecutionPolicy,
+    VisualArtifactCollector,
+    DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
     VisualImageConverter,
     VisualParseError,
 )
@@ -42,6 +44,8 @@ class VisualPdfConverter(DocumentConverter):
         item_timeout_seconds: float = 300,
         job_deadline_seconds: float = 900,
         max_concurrency: int = 4,
+        artifact_collector: VisualArtifactCollector | None = None,
+        artifact_allowed_hosts: tuple[str, ...] = DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
     ) -> None:
         self._execution_policy = execution_policy
         self._execution_config = execution_config or VisualExecutionConfig(
@@ -51,6 +55,8 @@ class VisualPdfConverter(DocumentConverter):
         )
         self._client = client
         self._model = model
+        self._artifact_collector = artifact_collector
+        self._artifact_allowed_hosts = artifact_allowed_hosts
 
     def accepts(
         self,
@@ -75,6 +81,8 @@ class VisualPdfConverter(DocumentConverter):
             client=self._client,
             model=self._model,
             execution_policy=execution_policy,
+            artifact_collector=self._artifact_collector,
+            artifact_allowed_hosts=self._artifact_allowed_hosts,
         )
         item_timeout_seconds = execution_policy.item_timeout_seconds
         job_deadline_seconds = execution_policy.job_deadline_seconds

@@ -18,9 +18,12 @@ FILE2DOC_VISUAL_BASE_URL=<ark-compatible-base-url>
 FILE2DOC_VISUAL_ITEM_TIMEOUT_SECONDS=300
 FILE2DOC_VISUAL_JOB_DEADLINE_SECONDS=900
 FILE2DOC_VISUAL_MAX_CONCURRENCY=4
+FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS=3600
+FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS=300
+FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS=ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com
 ```
 
-The `FILE2DOC_VISUAL_*` contract enables the File2Doc-owned MarkItDown visual plugin for standalone images, scanned pages, and embedded Office/PDF images. Each provider call is bounded by the item timeout, all calls share the whole-job deadline, and provider concurrency cannot exceed the configured maximum. Provider keys must come from environment or Kubernetes Secret injection and must never be written to manifests or evidence files.
+The `FILE2DOC_VISUAL_*` contract enables the File2Doc-owned MarkItDown visual plugin for standalone images, scanned pages, and embedded Office/PDF images. Each provider call is bounded by the item timeout, all calls share the whole-job deadline, and provider concurrency cannot exceed the configured maximum. Image Process Zoom/Rotate results are retained only as diagnostic artifacts for `FILE2DOC_VISUAL_ARTIFACT_TTL_SECONDS`. Their HTTPS host must exactly match `FILE2DOC_VISUAL_ARTIFACT_ALLOWED_HOSTS`, resolve only to public addresses, and return without redirects. A draft owner calls `POST /parse-jobs/{job_id}/diagnostics/release` on confirm, cancel, or expiry; this idempotently shortens their lifetime to `FILE2DOC_VISUAL_ARTIFACT_RELEASE_GRACE_SECONDS`. Provider keys must come from environment or Kubernetes Secret injection and must never be written to manifests or evidence files.
 
 The retired `FILE2DOC_OCR_*` aliases are intentionally unsupported. A deployment using them is misconfigured and will not activate Visual Parsing.
 

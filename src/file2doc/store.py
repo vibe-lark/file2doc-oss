@@ -6,6 +6,7 @@ import mimetypes
 import secrets
 import shutil
 import sqlite3
+import threading
 import zipfile
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -37,13 +38,20 @@ class JobStore:
         audio_parse_options: AudioParseOptions | None = None,
         parse_options: ParseOptions | None = None,
         video_frame_extractor: VideoFrameExtractor | None = None,
+        visual_artifact_ttl_seconds: float = 3600,
+        visual_artifact_release_grace_seconds: float = 300,
     ) -> None:
         self.storage_root = storage_root
         self.audio_parse_options = audio_parse_options
         self.parse_options = parse_options
         self.video_frame_extractor = video_frame_extractor or extract_video_frames
+        self.visual_artifact_ttl_seconds = max(float(visual_artifact_ttl_seconds), 0)
+        self.visual_artifact_release_grace_seconds = max(
+            float(visual_artifact_release_grace_seconds), 0
+        )
         self.jobs_root = storage_root / "jobs"
         self.jobs_root.mkdir(parents=True, exist_ok=True)
+        self._artifact_lock = threading.Lock()
         self.database_path = storage_root / "file2doc.sqlite3"
         self._init_database()
 
@@ -157,6 +165,13 @@ class JobStore:
                 new_artifact_id=lambda: _id("art"),
             )
             artifacts.update(visual_artifacts)
+        diagnostic_media, diagnostic_artifacts = self._write_visual_diagnostics(
+            parsed.visual_artifacts,
+            result_root=result_root,
+            job_expires_at=job["expires_at"],
+        )
+        media_index.extend(diagnostic_media)
+        artifacts.update(diagnostic_artifacts)
 
         self._append_event(job_id, "assembling", 80, "Assembling result package")
         manifest = {
@@ -184,6 +199,41 @@ class JobStore:
         self._write_json(result_root / "artifacts.json", artifacts)
 
         self._complete_job_record(job, content_artifact_id, warnings=parsed.warnings)
+
+    def _write_visual_diagnostics(
+        self,
+        visual_artifacts,
+        *,
+        result_root: Path,
+        job_expires_at: str,
+    ) -> tuple[list[dict], dict[str, dict]]:
+        media_index: list[dict] = []
+        artifacts: dict[str, dict] = {}
+        expires_at = min(
+            _now() + timedelta(seconds=self.visual_artifact_ttl_seconds),
+            _parse_iso(job_expires_at),
+        )
+        for index, visual in enumerate(visual_artifacts, 1):
+            artifact_id = _id("art")
+            suffix = ".png" if visual.media_type == "image/png" else ".jpg"
+            relative_path = f"diagnostics/image-process/{index:04d}{suffix}"
+            path = result_root / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(visual.content)
+            shared = {
+                "artifact_id": artifact_id,
+                "kind": visual.kind,
+                "path": relative_path,
+                "media_type": visual.media_type,
+                "source_ref": visual.source_ref,
+                "lifecycle": "structured_workflow_draft",
+                "attachment_role": "diagnostic_only",
+                "expires_at": _iso(expires_at),
+                "availability": "available",
+            }
+            artifacts[artifact_id] = shared
+            media_index.append({"id": f"visual-diagnostic-{index}", **shared})
+        return media_index, artifacts
 
     def _complete_audio_job(self, job: dict, source_path: Path, result_root: Path) -> None:
         self._append_event(job["job_id"], "asr_running", 30, "ASR transcription running")
@@ -432,8 +482,78 @@ class JobStore:
             artifact = artifacts[artifact_id]
         except KeyError as error:
             raise HTTPException(status_code=404, detail={"code": "artifact_not_found"}) from error
+        if artifact.get("availability") == "expired" or (
+            artifact.get("expires_at")
+            and _parse_iso(artifact["expires_at"]) <= _now()
+        ):
+            raise HTTPException(status_code=410, detail={"code": "artifact_expired"})
         absolute_path = self._job_root(job_id) / "result-package" / artifact["path"]
         return artifact | {"absolute_path": absolute_path}
+
+    def release_visual_diagnostics(self, job_id: str) -> dict:
+        job = self.read_job(job_id)
+        if job["status"] not in {"completed", "completed_with_warnings"}:
+            raise HTTPException(status_code=409, detail={"code": "result_not_ready"})
+
+        with self._artifact_lock:
+            result_root = self._job_root(job_id) / "result-package"
+            manifest_path = result_root / "manifest.json"
+            artifacts_path = result_root / "artifacts.json"
+            manifest = self._read_json(manifest_path)
+            artifacts = self._read_json(artifacts_path)
+            diagnostic_ids = [
+                artifact_id
+                for artifact_id, artifact in artifacts.items()
+                if _is_visual_diagnostic(artifact)
+            ]
+            already_released = bool(diagnostic_ids) and all(
+                artifacts[artifact_id].get("release_requested_at")
+                for artifact_id in diagnostic_ids
+            )
+            now = _now()
+            if not already_released:
+                release_requested_at = _iso(now)
+                release_expiry_candidates = [
+                    now
+                    + timedelta(seconds=self.visual_artifact_release_grace_seconds),
+                    _parse_iso(job["expires_at"]),
+                ]
+                release_expiry_candidates.extend(
+                    _parse_iso(artifacts[artifact_id]["expires_at"])
+                    for artifact_id in diagnostic_ids
+                )
+                release_expiry = min(release_expiry_candidates)
+                for artifact_id in diagnostic_ids:
+                    artifact = artifacts[artifact_id]
+                    artifact["expires_at"] = _iso(release_expiry)
+                    artifact["release_requested_at"] = release_requested_at
+                for media in manifest["media_index"]:
+                    artifact = artifacts.get(media.get("artifact_id"))
+                    if artifact is not None and _is_visual_diagnostic(artifact):
+                        media.update(
+                            {
+                                "expires_at": artifact["expires_at"],
+                                "release_requested_at": artifact[
+                                    "release_requested_at"
+                                ],
+                            }
+                        )
+                manifest["artifacts"] = list(artifacts.values())
+                self._write_json(manifest_path, manifest)
+                self._write_json(artifacts_path, artifacts)
+
+            release_expiries = sorted(
+                {artifacts[artifact_id]["expires_at"] for artifact_id in diagnostic_ids}
+            )
+            return {
+                "job_id": job_id,
+                "released_count": len(diagnostic_ids),
+                "artifact_ids": diagnostic_ids,
+                "release_expires_at": (
+                    release_expiries[0] if release_expiries else None
+                ),
+                "already_released": already_released,
+            }
 
     def regenerate_page_image(self, job_id: str, *, page: int, dpi: int) -> dict:
         job = self.read_job(job_id)
@@ -531,6 +651,7 @@ class JobStore:
         expired_count = 0
         deleted_bytes = 0
         deleted_jobs: list[str] = []
+        expired_artifact_ids: list[str] = []
 
         with self._connect() as connection:
             rows = connection.execute("select document from jobs").fetchall()
@@ -538,7 +659,15 @@ class JobStore:
         for row in rows:
             job = json.loads(row["document"])
             scanned_count += 1
-            if job["status"] == "expired" or _parse_iso(job["expires_at"]) > now:
+            if job["status"] == "expired":
+                continue
+
+            if _parse_iso(job["expires_at"]) > now:
+                expired_ids, artifact_bytes = self._cleanup_visual_diagnostics(
+                    job["job_id"], now=now
+                )
+                expired_artifact_ids.extend(expired_ids)
+                deleted_bytes += artifact_bytes
                 continue
 
             job_id = job["job_id"]
@@ -577,7 +706,49 @@ class JobStore:
             "expired_count": expired_count,
             "deleted_bytes": deleted_bytes,
             "deleted_jobs": deleted_jobs,
+            "expired_artifact_count": len(expired_artifact_ids),
+            "expired_artifact_ids": expired_artifact_ids,
         }
+
+    def _cleanup_visual_diagnostics(
+        self, job_id: str, *, now: datetime
+    ) -> tuple[list[str], int]:
+        result_root = self._job_root(job_id) / "result-package"
+        manifest_path = result_root / "manifest.json"
+        artifacts_path = result_root / "artifacts.json"
+        if not manifest_path.is_file() or not artifacts_path.is_file():
+            return [], 0
+        with self._artifact_lock:
+            manifest = self._read_json(manifest_path)
+            artifacts = self._read_json(artifacts_path)
+            expired_ids: list[str] = []
+            deleted_bytes = 0
+            expired_at = _iso(now)
+            for artifact_id, artifact in artifacts.items():
+                if (
+                    not _is_visual_diagnostic(artifact)
+                    or artifact.get("availability") == "expired"
+                    or _parse_iso(artifact["expires_at"]) > now
+                ):
+                    continue
+                path = result_root / artifact["path"]
+                if path.is_file():
+                    deleted_bytes += path.stat().st_size
+                    path.unlink()
+                artifact["availability"] = "expired"
+                artifact["expired_at"] = expired_at
+                expired_ids.append(artifact_id)
+            if not expired_ids:
+                return [], 0
+            for media in manifest["media_index"]:
+                artifact = artifacts.get(media.get("artifact_id"))
+                if artifact is not None and artifact.get("availability") == "expired":
+                    media["availability"] = "expired"
+                    media["expired_at"] = artifact["expired_at"]
+            manifest["artifacts"] = list(artifacts.values())
+            self._write_json(manifest_path, manifest)
+            self._write_json(artifacts_path, artifacts)
+            return expired_ids, deleted_bytes
 
     def _init_database(self) -> None:
         self.storage_root.mkdir(parents=True, exist_ok=True)
@@ -838,6 +1009,15 @@ def _image_media_type(source_path: Path, content_type: str) -> str:
     if media_type in {"image/png", "image/jpeg", "image/jpg"}:
         return "image/jpeg" if media_type == "image/jpg" else media_type
     return "image/png" if source_path.suffix.lower() == ".png" else "image/jpeg"
+
+
+def _is_visual_diagnostic(artifact: dict) -> bool:
+    return (
+        artifact.get("lifecycle") == "structured_workflow_draft"
+        and artifact.get("attachment_role") == "diagnostic_only"
+        and artifact.get("kind")
+        in {"image_process_zoom_result", "image_process_rotate_result"}
+    )
 
 
 def _transcript_markdown(text: str) -> str:
