@@ -5,13 +5,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
-from markitdown import StreamInfo
+from markitdown import MarkItDown, StreamInfo
 from PIL import Image
 from docx import Document
+import pytest
 
 from file2doc.parsers import ParseOptions
+from file2doc.parsers import ParseFailure
 from file2doc_markitdown_visual.embedded import EmbeddedVisualParser
-from file2doc_markitdown_visual.plugin import VisualImageConverter
+from file2doc_markitdown_visual.plugin import VisualImageConverter, register_converters
 from file2doc_markitdown_visual.plugin import VisualExecutionPolicy
 
 
@@ -89,9 +91,11 @@ def test_visual_provider_calls_use_item_timeout_and_bounded_concurrency():
     converter = VisualImageConverter(
         client=SimpleNamespace(responses=Responses()),
         model="ep-visual",
-        item_timeout_seconds=17,
-        job_deadline_seconds=60,
-        max_concurrency=2,
+        execution_policy=VisualExecutionPolicy(
+            item_timeout_seconds=17,
+            job_deadline_seconds=60,
+            max_concurrency=2,
+        ),
     )
     stream_info = StreamInfo(filename="sample.png", mimetype="image/png")
 
@@ -196,3 +200,47 @@ def test_parse_entrypoint_routes_office_embedded_images_through_visual_plugin(tm
     assert "Native office text" in parsed.markdown
     assert "Embedded Image" in parsed.markdown
     assert calls
+
+
+def test_same_markitdown_instance_starts_a_fresh_deadline_for_each_job(tmp_path):
+    call_count = 0
+
+    class Responses:
+        def create(self, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                time.sleep(0.06)
+            return SimpleNamespace(output_text=json.dumps(VALID_RESULT))
+
+    markitdown = MarkItDown(enable_builtins=False)
+    register_converters(
+        markitdown,
+        visual_client=SimpleNamespace(responses=Responses()),
+        visual_model="ep-visual",
+        visual_item_timeout_seconds=1,
+        visual_job_deadline_seconds=0.05,
+        visual_max_concurrency=1,
+    )
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    first.write_bytes(_png_bytes("white"))
+    second.write_bytes(_png_bytes("black"))
+
+    markitdown.convert(first)
+    result = markitdown.convert(second)
+
+    assert call_count == 2
+    assert "# Visual Analysis" in result.markdown
+
+
+def test_pdf_without_visual_configuration_fails_instead_of_using_core(tmp_path):
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF-1.7\n")
+
+    from file2doc.parsers import parse_content_markdown
+
+    with pytest.raises(ParseFailure) as failure:
+        parse_content_markdown(source, "application/pdf", ParseOptions())
+
+    assert failure.value.code == "visual_parsing_not_configured"

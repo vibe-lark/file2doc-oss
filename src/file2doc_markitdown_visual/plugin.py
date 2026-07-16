@@ -7,6 +7,7 @@ import mimetypes
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
@@ -61,6 +62,20 @@ class VisualItemNotProcessed(VisualParseError):
     """Raised when a visual item cannot start before the whole-job deadline."""
 
 
+@dataclass(frozen=True)
+class VisualExecutionConfig:
+    item_timeout_seconds: float = 300
+    job_deadline_seconds: float = 900
+    max_concurrency: int = 4
+
+    def create_policy(self) -> "VisualExecutionPolicy":
+        return VisualExecutionPolicy(
+            item_timeout_seconds=self.item_timeout_seconds,
+            job_deadline_seconds=self.job_deadline_seconds,
+            max_concurrency=self.max_concurrency,
+        )
+
+
 class VisualExecutionPolicy:
     """Bound provider concurrency and every call by one shared job deadline."""
 
@@ -106,13 +121,15 @@ class VisualImageConverter(DocumentConverter):
         client: Any,
         model: str,
         execution_policy: VisualExecutionPolicy | None = None,
+        execution_config: VisualExecutionConfig | None = None,
         item_timeout_seconds: float = 300,
         job_deadline_seconds: float = 900,
         max_concurrency: int = 4,
     ) -> None:
         self._client = client
         self._model = model
-        self._execution_policy = execution_policy or VisualExecutionPolicy(
+        self._execution_policy = execution_policy
+        self._execution_config = execution_config or VisualExecutionConfig(
             item_timeout_seconds=item_timeout_seconds,
             job_deadline_seconds=job_deadline_seconds,
             max_concurrency=max_concurrency,
@@ -144,7 +161,8 @@ class VisualImageConverter(DocumentConverter):
             exiftool_path=kwargs.get("exiftool_path"),
         )
         encoded = base64.b64encode(file_stream.read()).decode("ascii")
-        response = self._execution_policy.call(
+        execution_policy = self._execution_policy or self._execution_config.create_policy()
+        response = execution_policy.call(
             lambda timeout: self._client.responses.create(
                 model=self._model,
                 tools=[IMAGE_PROCESS_TOOL],
@@ -204,7 +222,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
             "File2Doc Visual Parsing requires visual_client and visual_model"
         )
     normalized_model = model.strip()
-    execution_policy = VisualExecutionPolicy(
+    execution_config = VisualExecutionConfig(
         item_timeout_seconds=kwargs.get("visual_item_timeout_seconds", 300),
         job_deadline_seconds=kwargs.get("visual_job_deadline_seconds", 900),
         max_concurrency=kwargs.get("visual_max_concurrency", 4),
@@ -213,7 +231,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         VisualImageConverter(
             client=client,
             model=normalized_model,
-            execution_policy=execution_policy,
+            execution_config=execution_config,
         ),
         priority=-1,
     )
@@ -224,7 +242,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         client=client,
         model=normalized_model,
         exiftool_path=kwargs.get("exiftool_path"),
-        execution_policy=execution_policy,
+        execution_config=execution_config,
     )
     markitdown.register_converter(
         VisualDocxConverter(visual_parser=visual_parser),
@@ -244,7 +262,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         VisualPdfConverter(
             client=client,
             model=model.strip(),
-            execution_policy=execution_policy,
+            execution_config=execution_config,
         ),
         priority=-1,
     )

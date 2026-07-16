@@ -1,11 +1,34 @@
 from pathlib import Path
+import json
+from types import SimpleNamespace
 
 from docx import Document
 from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from file2doc.app import create_app
+from file2doc.parsers import ParseOptions
 from fixtures import sample_file
+
+
+class _Responses:
+    def create(self, **kwargs):
+        return SimpleNamespace(output_text=json.dumps({
+            "description": "An embedded document image.",
+            "visibleText": [],
+            "candidateNumericValues": [],
+            "layout": "Embedded in document reading order.",
+            "imageProcessActions": [],
+            "imageProcessWarnings": [],
+            "warnings": [],
+        }))
+
+
+def _visual_parse_options() -> ParseOptions:
+    return ParseOptions(
+        visual_client=SimpleNamespace(responses=_Responses()),
+        visual_model="ep-visual",
+    )
 
 
 def test_uploaded_docx_produces_non_empty_markitdown_markdown(tmp_path):
@@ -14,7 +37,11 @@ def test_uploaded_docx_produces_non_empty_markitdown_markdown(tmp_path):
     document.add_heading("Quarterly Office Support", level=1)
     document.add_paragraph("DOCX generated sample marker: alpha roadmap.")
     document.save(sample)
-    client = TestClient(create_app(storage_root=tmp_path / "storage", auth_enabled=False))
+    client = TestClient(create_app(
+        storage_root=tmp_path / "storage",
+        auth_enabled=False,
+        parse_options=_visual_parse_options(),
+    ))
 
     create_response = client.post(
         "/parse-jobs/upload",
@@ -46,8 +73,9 @@ def test_uploaded_docx_produces_non_empty_markitdown_markdown(tmp_path):
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
     assert manifest["content"]["artifact_id"] == job["result"]["content_artifact_id"]
-    assert manifest["parser"]["name"] == "markitdown"
+    assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
     assert manifest["parser"]["version"]
+    assert manifest["parser"]["visual_plugin_version"] == "0.2.0"
 
     content_response = client.get(job["result"]["content_url"])
     assert content_response.status_code == 200
@@ -65,7 +93,11 @@ def test_uploaded_xlsx_produces_non_empty_markitdown_markdown(tmp_path):
     worksheet.append(["Metric", "Value"])
     worksheet.append(["XLSX generated sample marker", "beta spreadsheet"])
     workbook.save(sample)
-    client = TestClient(create_app(storage_root=tmp_path / "storage", auth_enabled=False))
+    client = TestClient(create_app(
+        storage_root=tmp_path / "storage",
+        auth_enabled=False,
+        parse_options=_visual_parse_options(),
+    ))
 
     create_response = client.post(
         "/parse-jobs/upload",
@@ -97,8 +129,9 @@ def test_uploaded_xlsx_produces_non_empty_markitdown_markdown(tmp_path):
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
     assert manifest["content"]["artifact_id"] == job["result"]["content_artifact_id"]
-    assert manifest["parser"]["name"] == "markitdown"
+    assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
     assert manifest["parser"]["version"]
+    assert manifest["parser"]["visual_plugin_version"] == "0.2.0"
 
     content_response = client.get(job["result"]["content_url"])
     assert content_response.status_code == 200
@@ -112,7 +145,11 @@ def test_uploaded_xlsx_produces_non_empty_markitdown_markdown(tmp_path):
 def test_uploaded_docx_with_no_extracted_markdown_fails_visibly(tmp_path):
     sample = tmp_path / "blank-office-support.docx"
     Document().save(sample)
-    client = TestClient(create_app(storage_root=tmp_path / "storage", auth_enabled=False))
+    client = TestClient(create_app(
+        storage_root=tmp_path / "storage",
+        auth_enabled=False,
+        parse_options=_visual_parse_options(),
+    ))
 
     created = client.post(
         "/parse-jobs/upload",
@@ -128,7 +165,7 @@ def test_uploaded_docx_with_no_extracted_markdown_fails_visibly(tmp_path):
 
     assert job["status"] == "failed"
     assert job["stage"] == "failed"
-    assert job["error"]["code"] == "empty_parse_result"
+    assert job["error"]["code"] == "visual_item_failed"
     assert job["result"] is None
 
     manifest_response = client.get(f"/parse-jobs/{created['job_id']}/result")
@@ -138,7 +175,11 @@ def test_uploaded_docx_with_no_extracted_markdown_fails_visibly(tmp_path):
 
 def test_uploaded_pptx_produces_non_empty_markitdown_markdown(tmp_path):
     sample = sample_file("1.1.1 基础系列-导读课-大模型技术趋势与企业级 LLMOps 平台价值解读.pptx")
-    client = TestClient(create_app(storage_root=tmp_path, auth_enabled=False))
+    client = TestClient(create_app(
+        storage_root=tmp_path,
+        auth_enabled=False,
+        parse_options=_visual_parse_options(),
+    ))
 
     create_response = client.post(
         "/parse-jobs/upload",

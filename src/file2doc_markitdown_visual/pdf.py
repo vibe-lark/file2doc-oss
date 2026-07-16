@@ -11,7 +11,12 @@ import pdfplumber
 import pypdfium2 as pdfium
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
 
-from .plugin import VisualExecutionPolicy, VisualImageConverter, VisualParseError
+from .plugin import (
+    VisualExecutionConfig,
+    VisualExecutionPolicy,
+    VisualImageConverter,
+    VisualParseError,
+)
 
 
 @dataclass(frozen=True)
@@ -33,23 +38,19 @@ class VisualPdfConverter(DocumentConverter):
         client: Any,
         model: str,
         execution_policy: VisualExecutionPolicy | None = None,
+        execution_config: VisualExecutionConfig | None = None,
         item_timeout_seconds: float = 300,
         job_deadline_seconds: float = 900,
         max_concurrency: int = 4,
     ) -> None:
-        self._execution_policy = execution_policy or VisualExecutionPolicy(
+        self._execution_policy = execution_policy
+        self._execution_config = execution_config or VisualExecutionConfig(
             item_timeout_seconds=item_timeout_seconds,
             job_deadline_seconds=job_deadline_seconds,
             max_concurrency=max_concurrency,
         )
-        self._image_converter = VisualImageConverter(
-            client=client,
-            model=model,
-            execution_policy=self._execution_policy,
-        )
-        self._item_timeout_seconds = self._execution_policy.item_timeout_seconds
-        self._job_deadline_seconds = self._execution_policy.job_deadline_seconds
-        self._max_concurrency = self._execution_policy.max_concurrency
+        self._client = client
+        self._model = model
 
     def accepts(
         self,
@@ -69,7 +70,16 @@ class VisualPdfConverter(DocumentConverter):
     ) -> DocumentConverterResult:
         file_stream.seek(0)
         source_bytes = file_stream.read()
-        deadline_at = self._execution_policy.deadline_at
+        execution_policy = self._execution_policy or self._execution_config.create_policy()
+        image_converter = VisualImageConverter(
+            client=self._client,
+            model=self._model,
+            execution_policy=execution_policy,
+        )
+        item_timeout_seconds = execution_policy.item_timeout_seconds
+        job_deadline_seconds = execution_policy.job_deadline_seconds
+        max_concurrency = execution_policy.max_concurrency
+        deadline_at = execution_policy.deadline_at
         page_items: list[list[_PageItem]] = []
         extraction_warnings: list[str] = []
         try:
@@ -99,7 +109,11 @@ class VisualPdfConverter(DocumentConverter):
         visual_results = self._parse_visual_items(
             [item for items in page_items for item in items if item.image is not None],
             kwargs,
+            image_converter=image_converter,
             deadline_at=deadline_at,
+            item_timeout_seconds=item_timeout_seconds,
+            job_deadline_seconds=job_deadline_seconds,
+            max_concurrency=max_concurrency,
         )
         pages: list[str] = []
         warnings = list(extraction_warnings)
@@ -156,7 +170,11 @@ class VisualPdfConverter(DocumentConverter):
         items: list[_PageItem],
         kwargs: dict[str, Any],
         *,
+        image_converter: VisualImageConverter,
         deadline_at: float,
+        item_timeout_seconds: float,
+        job_deadline_seconds: float,
+        max_concurrency: int,
     ) -> dict[str, tuple[bool, str]]:
         unique: dict[str, _PageItem] = {}
         for item in items:
@@ -166,21 +184,22 @@ class VisualPdfConverter(DocumentConverter):
         queued = list(unique.items())
         results: dict[str, tuple[bool, str]] = {}
         pending: dict[Future, tuple[str, float]] = {}
-        executor = ThreadPoolExecutor(max_workers=self._max_concurrency)
+        executor = ThreadPoolExecutor(max_workers=max_concurrency)
 
         def submit_available() -> None:
             while (
                 queued
-                and len(pending) < self._max_concurrency
+                and len(pending) < max_concurrency
                 and monotonic() < deadline_at
             ):
                 content_hash, item = queued.pop(0)
                 request_timeout = min(
-                    self._item_timeout_seconds,
+                    item_timeout_seconds,
                     max(deadline_at - monotonic(), 0.001),
                 )
                 future = executor.submit(
                     self._parse_visual_item,
+                    image_converter,
                     item,
                     kwargs,
                     request_timeout,
@@ -197,7 +216,7 @@ class VisualPdfConverter(DocumentConverter):
                 if not pending:
                     break
                 next_item_timeout = min(
-                    started_at + self._item_timeout_seconds - now
+                    started_at + item_timeout_seconds - now
                     for _, started_at in pending.values()
                 )
                 completed, _ = wait(
@@ -219,7 +238,7 @@ class VisualPdfConverter(DocumentConverter):
                 timed_out = [
                     future
                     for future, (_, started_at) in pending.items()
-                    if now - started_at >= self._item_timeout_seconds
+                    if now - started_at >= item_timeout_seconds
                 ]
                 for future in timed_out:
                     content_hash, _ = pending.pop(future)
@@ -227,14 +246,14 @@ class VisualPdfConverter(DocumentConverter):
                     results[content_hash] = (
                         False,
                         "visual item timed out after "
-                        f"{self._item_timeout_seconds:g} seconds",
+                        f"{item_timeout_seconds:g} seconds",
                     )
                 submit_available()
         finally:
             if pending or queued:
                 reason = (
                     "visual job deadline exceeded after "
-                    f"{self._job_deadline_seconds:g} seconds"
+                    f"{job_deadline_seconds:g} seconds"
                 )
                 for future, (content_hash, _) in pending.items():
                     future.cancel()
@@ -247,12 +266,13 @@ class VisualPdfConverter(DocumentConverter):
 
     def _parse_visual_item(
         self,
+        image_converter: VisualImageConverter,
         item: _PageItem,
         kwargs: dict[str, Any],
         request_timeout: float,
     ) -> str:
         assert item.image is not None
-        visual = self._image_converter.convert(
+        visual = image_converter.convert(
             io.BytesIO(item.image),
             StreamInfo(filename="pdf-visual.png", mimetype="image/png"),
             **kwargs,

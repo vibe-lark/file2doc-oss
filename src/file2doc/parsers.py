@@ -115,7 +115,7 @@ def parse_content_markdown(
             started_at,
         )
 
-    if (_is_pdf(content_type) or _is_office(content_type)) and parse_options.visual_configured:
+    if _is_pdf(content_type) or _is_office(content_type):
         return _parse_with_visual_plugin(
             source_path,
             content_type,
