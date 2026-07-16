@@ -5,6 +5,8 @@ import json
 import locale
 import mimetypes
 import subprocess
+import threading
+import time
 from typing import Any, BinaryIO
 
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
@@ -55,10 +57,64 @@ class VisualParseError(Exception):
     """Raised when the visual provider cannot produce a valid generic result."""
 
 
+class VisualItemNotProcessed(VisualParseError):
+    """Raised when a visual item cannot start before the whole-job deadline."""
+
+
+class VisualExecutionPolicy:
+    """Bound provider concurrency and every call by one shared job deadline."""
+
+    def __init__(
+        self,
+        *,
+        item_timeout_seconds: float,
+        job_deadline_seconds: float,
+        max_concurrency: int,
+    ) -> None:
+        self.item_timeout_seconds = max(float(item_timeout_seconds), 0.001)
+        self._deadline_at = time.monotonic() + max(float(job_deadline_seconds), 0.001)
+        self._semaphore = threading.BoundedSemaphore(max(1, int(max_concurrency)))
+
+    def call(self, operation):
+        remaining = self._deadline_at - time.monotonic()
+        if remaining <= 0:
+            raise VisualItemNotProcessed(
+                "visual item was not processed because the job deadline was reached"
+            )
+        if not self._semaphore.acquire(timeout=remaining):
+            raise VisualItemNotProcessed(
+                "visual item was not processed because the job deadline was reached "
+                "while waiting for provider capacity"
+            )
+        try:
+            remaining = self._deadline_at - time.monotonic()
+            if remaining <= 0:
+                raise VisualItemNotProcessed(
+                    "visual item was not processed because the job deadline was reached"
+                )
+            return operation(min(self.item_timeout_seconds, remaining))
+        finally:
+            self._semaphore.release()
+
+
 class VisualImageConverter(DocumentConverter):
-    def __init__(self, *, client: Any, model: str) -> None:
+    def __init__(
+        self,
+        *,
+        client: Any,
+        model: str,
+        execution_policy: VisualExecutionPolicy | None = None,
+        item_timeout_seconds: float = 300,
+        job_deadline_seconds: float = 900,
+        max_concurrency: int = 4,
+    ) -> None:
         self._client = client
         self._model = model
+        self._execution_policy = execution_policy or VisualExecutionPolicy(
+            item_timeout_seconds=item_timeout_seconds,
+            job_deadline_seconds=job_deadline_seconds,
+            max_concurrency=max_concurrency,
+        )
 
     def accepts(
         self,
@@ -86,50 +142,53 @@ class VisualImageConverter(DocumentConverter):
             exiftool_path=kwargs.get("exiftool_path"),
         )
         encoded = base64.b64encode(file_stream.read()).decode("ascii")
-        response = self._client.responses.create(
-            model=self._model,
-            tools=[IMAGE_PROCESS_TOOL],
-            input=[
-                {
-                    "type": "message",
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_image",
-                            "image_url": f"data:{media_type};base64,{encoded}",
-                            "detail": "xhigh",
-                        },
-                        {
-                            "type": "input_text",
-                            "text": (
-                                "Describe this image in detail and transcribe all visible "
-                                "text exactly. Before extracting, inspect orientation, "
-                                "small text, display regions, and ambiguous characters. "
-                                "Use Rotate when orientation impairs reading. Use Zoom on "
-                                "small or ambiguous regions before deciding their text or "
-                                "numeric value. Preserve repeated digits, decimal points, "
-                                "reading order, and the distinction between illuminated "
-                                "digits and unlit display placeholders. In "
-                                "imageProcessActions, report only Zoom or Rotate actions "
-                                "actually performed; use an empty array when neither was "
-                                "used. Put tool-specific limitations in "
-                                "imageProcessWarnings. Return generic visual evidence only; "
-                                "do not infer business fields or domain conclusions."
-                            ),
-                        },
-                    ],
-                }
-            ],
-            text={
-                "format": {
-                    "type": "json_schema",
-                    "name": "file2doc_visual_result",
-                    "strict": True,
-                    "schema": VISUAL_RESULT_SCHEMA,
-                }
-            },
-            extra_headers={"ark-beta-image-process": "true"},
-            extra_body={"thinking": {"type": "disabled"}},
+        response = self._execution_policy.call(
+            lambda timeout: self._client.responses.create(
+                model=self._model,
+                tools=[IMAGE_PROCESS_TOOL],
+                input=[
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_image",
+                                "image_url": f"data:{media_type};base64,{encoded}",
+                                "detail": "xhigh",
+                            },
+                            {
+                                "type": "input_text",
+                                "text": (
+                                    "Describe this image in detail and transcribe all visible "
+                                    "text exactly. Before extracting, inspect orientation, "
+                                    "small text, display regions, and ambiguous characters. "
+                                    "Use Rotate when orientation impairs reading. Use Zoom on "
+                                    "small or ambiguous regions before deciding their text or "
+                                    "numeric value. Preserve repeated digits, decimal points, "
+                                    "reading order, and the distinction between illuminated "
+                                    "digits and unlit display placeholders. In "
+                                    "imageProcessActions, report only Zoom or Rotate actions "
+                                    "actually performed; use an empty array when neither was "
+                                    "used. Put tool-specific limitations in "
+                                    "imageProcessWarnings. Return generic visual evidence only; "
+                                    "do not infer business fields or domain conclusions."
+                                ),
+                            },
+                        ],
+                    }
+                ],
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "file2doc_visual_result",
+                        "strict": True,
+                        "schema": VISUAL_RESULT_SCHEMA,
+                    }
+                },
+                extra_headers={"ark-beta-image-process": "true"},
+                extra_body={"thinking": {"type": "disabled"}},
+                timeout=timeout,
+            )
         )
         result = _parse_visual_result(getattr(response, "output_text", None))
         return DocumentConverterResult(markdown=_render_markdown(result, metadata))
@@ -143,8 +202,17 @@ def register_converters(markitdown, **kwargs: Any) -> None:
             "File2Doc Visual Parsing requires visual_client and visual_model"
         )
     normalized_model = model.strip()
+    execution_policy = VisualExecutionPolicy(
+        item_timeout_seconds=kwargs.get("visual_item_timeout_seconds", 300),
+        job_deadline_seconds=kwargs.get("visual_job_deadline_seconds", 900),
+        max_concurrency=kwargs.get("visual_max_concurrency", 4),
+    )
     markitdown.register_converter(
-        VisualImageConverter(client=client, model=normalized_model),
+        VisualImageConverter(
+            client=client,
+            model=normalized_model,
+            execution_policy=execution_policy,
+        ),
         priority=-1,
     )
     from .embedded import EmbeddedVisualParser
@@ -154,6 +222,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         client=client,
         model=normalized_model,
         exiftool_path=kwargs.get("exiftool_path"),
+        execution_policy=execution_policy,
     )
     markitdown.register_converter(
         VisualDocxConverter(visual_parser=visual_parser),

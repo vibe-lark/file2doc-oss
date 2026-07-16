@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from markitdown import StreamInfo
 from PIL import Image, UnidentifiedImageError
 
-from .plugin import VisualImageConverter
+from .plugin import VisualExecutionPolicy, VisualImageConverter
 
 
 @dataclass(frozen=True)
@@ -25,16 +25,19 @@ class EmbeddedVisualParser:
         client,
         model: str,
         exiftool_path: str | None = None,
+        execution_policy: VisualExecutionPolicy | None = None,
     ) -> None:
         self._client = client
         self._model = model
         self._exiftool_path = exiftool_path
+        self._execution_policy = execution_policy
 
     def new_session(self) -> "EmbeddedVisualSession":
         return EmbeddedVisualSession(
             client=self._client,
             model=self._model,
             exiftool_path=self._exiftool_path,
+            execution_policy=self._execution_policy,
         )
 
 
@@ -47,8 +50,13 @@ class EmbeddedVisualSession:
         client,
         model: str,
         exiftool_path: str | None,
+        execution_policy: VisualExecutionPolicy | None = None,
     ) -> None:
-        self._converter = VisualImageConverter(client=client, model=model)
+        self._converter = VisualImageConverter(
+            client=client,
+            model=model,
+            execution_policy=execution_policy,
+        )
         self._exiftool_path = exiftool_path
         self._cache: dict[str, EmbeddedVisualResult] = {}
 
