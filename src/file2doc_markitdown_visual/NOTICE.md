@@ -7,12 +7,17 @@ the exact source commit reviewed on 2026-07-16:
 - Commit: `e144e0a2be95b34df17433bac904e635f2c5e551`
 - https://github.com/microsoft/markitdown/tree/e144e0a2be95b34df17433bac904e635f2c5e551/packages/markitdown-ocr
 - https://github.com/microsoft/markitdown/blob/e144e0a2be95b34df17433bac904e635f2c5e551/packages/markitdown/src/markitdown/converters/_image_converter.py
+- https://github.com/microsoft/markitdown/blob/e144e0a2be95b34df17433bac904e635f2c5e551/packages/markitdown-ocr/src/markitdown_ocr/_docx_converter_with_ocr.py
+- https://github.com/microsoft/markitdown/blob/e144e0a2be95b34df17433bac904e635f2c5e551/packages/markitdown-ocr/src/markitdown_ocr/_pptx_converter_with_ocr.py
+- https://github.com/microsoft/markitdown/blob/e144e0a2be95b34df17433bac904e635f2c5e551/packages/markitdown-ocr/src/markitdown_ocr/_xlsx_converter_with_ocr.py
 
 The derivative preserves the standard `markitdown.plugin` registration model,
 converter priority, generic detailed-image-description intent, supported image
-metadata fields, and inline Markdown boundary. Provider invocation, structured
-result validation, and failure semantics are independently implemented for
-File2Doc and do not promise future upstream compatibility.
+metadata fields, DOCX inline insertion, PPTX slide/shape order, XLSX sheet
+grouping with anchor context, and the inline Markdown boundary. Provider
+invocation, structured result validation, content-hash reuse, and partial-failure
+semantics are independently implemented for File2Doc and do not promise future
+upstream compatibility.
 
 This package is independently versioned even though it is currently shipped
 inside the File2Doc wheel. `PACKAGE-METADATA.json` is the version source and
