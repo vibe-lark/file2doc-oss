@@ -25,7 +25,7 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
 
     assert response.status_code == 200
     assert response.json() == {
-        "service_version": "0.1.22",
+        "service_version": "0.1.23",
         "supported_source_groups": ["pdf", "office", "text", "audio", "video"],
         "auth_required": True,
         "storage_root": str(tmp_path / "storage"),
@@ -52,7 +52,7 @@ def test_healthz_is_public_and_returns_service_status(tmp_path):
     assert response.json() == {
         "status": "ok",
         "service": "file2doc",
-        "service_version": "0.1.22",
+        "service_version": "0.1.23",
     }
 
 
@@ -67,7 +67,7 @@ def test_readyz_is_public_and_checks_storage_and_sqlite(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "service_version": "0.1.22",
+        "service_version": "0.1.23",
         "local_asr_engine": "funasr-local",
         "local_asr_model_present": False,
         "ffmpeg_available": True,
@@ -115,11 +115,11 @@ def test_skill_version_endpoint_reports_installed_version_status(tmp_path):
 
     response = client.get(
         "/skills/file2doc-http/version.json",
-        params={"installed_version": "0.1.21"},
+        params={"installed_version": "0.1.22"},
     )
 
     assert response.status_code == 200
-    assert response.json()["service_version"] == "0.1.22"
+    assert response.json()["service_version"] == "0.1.23"
     assert response.json()["skill"]["update_available"] is True
     assert response.json()["skill"]["update_required"] is False
 

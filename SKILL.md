@@ -2,7 +2,7 @@
 name: file2doc-http
 description: Parse offline files with the File2Doc HTTP API and retrieve Markdown, manifest, media artifacts, transcripts, and video frames. Use when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
 metadata:
-  version: "0.1.22"
+  version: "0.1.23"
 ---
 
 # File2Doc HTTP
@@ -14,7 +14,7 @@ the local file bytes.
 
 ```bash
 BASE_URL=${BASE_URL:-https://file2doc.solutionsuite.cn}
-SKILL_VERSION=0.1.22
+SKILL_VERSION=0.1.23
 
 curl -fsS "$BASE_URL/skills/file2doc-http/version.json?installed_version=$SKILL_VERSION"
 
@@ -37,7 +37,7 @@ started with auth enabled.
    `update_required` is true, show the supplied update command and stop. If only
    `update_available` is true, mention it without blocking the task.
 2. Upload with `POST /parse-jobs/upload` and send
-   `X-File2Doc-Skill-Version: 0.1.22` on upload, status, and result requests.
+   `X-File2Doc-Skill-Version: 0.1.23` on upload, status, and result requests.
 3. Poll `GET /parse-jobs/{job_id}` until `completed`,
    `completed_with_warnings`, or `failed`.
 4. If failed, read `error.code` and stop result retrieval because no package
@@ -50,7 +50,47 @@ started with auth enabled.
    `artifact_id` through the same artifact endpoint.
 9. Use `GET /parse-jobs/{job_id}/package` only for full zip export or debugging.
 
-## Source Attribution
+## Final Document
+
+Apply this section only when the user asks for a final document, tutorial, SOP,
+report, or Lark document. If the user only asks to parse a file or retrieve
+artifacts, return the requested results without forcing document creation.
+
+When the target is a Lark document, use the available `lark-doc` or equivalent
+document skill for creation, updates, media insertion, and platform-specific
+formatting. File2Doc supplies the source content and artifacts; these rules
+define the expected document quality.
+
+### Writing and Structure
+
+1. Read the Markdown and manifest before writing. For visual inputs, inspect
+   thumbnails, page images, timeline entries, or video frames before choosing
+   the document structure.
+2. Rewrite for the user's goal. Do not paste raw parser output unchanged.
+   Remove repeated headers and footers, broken lines, extraction noise, and
+   duplicated content.
+3. Use one document title, H2 for main sections, and H3 only when a section
+   genuinely needs subdivision. Use paragraphs for explanation, lists for
+   procedures, and tables only for genuinely comparable data.
+4. Start with a short overview, present the useful content in a task-appropriate
+   order, and end with the source references.
+
+### Visuals
+
+- Use images that explain an operation, provide evidence, or clarify a state.
+  Do not insert images only for decoration.
+- For SOPs and tutorials, each major workflow should include at least one useful source image
+  when one is available.
+- Put each image immediately after the paragraph or step it supports. Do not
+  collect all images at the end of the document.
+- Add a short caption describing what the image shows. Preserve page numbers
+  for document images and timestamps for video frames.
+- Use thumbnails to select images. Insert page images or higher-resolution
+  artifacts in the final document when readability matters.
+- Do not insert every available page image or video frame. Audio and other
+  sources without useful visual artifacts do not require images.
+
+### Source Attribution
 
 Every final document created from File2Doc output must include a concise
 `Sources` or `来源` section that lets the user trace every input.
@@ -66,6 +106,18 @@ Every final document created from File2Doc output must include a concise
   source reference.
 - If the Agent cannot attach the file or produce a user-accessible source link,
   ask the user for a durable source location before finalizing the document.
+
+### Delivery Check
+
+Before delivery, verify that:
+
+- the document answers the user's actual goal;
+- headings, paragraphs, procedures, and tables have been intentionally organized;
+- useful images appear beside the content they support;
+- obvious broken lines, duplicates, and extraction noise have been removed;
+- incomplete parsing has not been filled with invented facts;
+- warnings, missing content, and material recognition uncertainty are disclosed;
+- every source is traceable by the user.
 
 ## Contract
 

@@ -22,11 +22,20 @@ def test_agent_api_docs_preserve_result_retrieval_contract() -> None:
     assert "empty_result" in combined
     assert "npx skills add vibe-lark/file2doc-skill --skill file2doc-http" in skill_guide
     assert "npx skills update file2doc-http" in skill_guide
-    assert 'version: "0.1.22"' in skill_guide
+    assert 'version: "0.1.23"' in skill_guide
     assert "/skills/file2doc-http/version.json" in skill_guide
     assert "X-File2Doc-Skill-Version" in skill_guide
     assert "vibe-lark/file2doc-skill" in skill_guide
-    assert "## Source Attribution" in skill_guide
+    assert "## Final Document" in skill_guide
+    assert "### Writing and Structure" in skill_guide
+    assert "### Visuals" in skill_guide
+    assert "### Source Attribution" in skill_guide
+    assert "### Delivery Check" in skill_guide
+    assert "If the user only asks to parse" in skill_guide
+    assert "Do not paste raw parser output unchanged" in skill_guide
+    assert "Put each image immediately after" in skill_guide
+    assert "each major workflow should include at least one useful source image" in skill_guide
+    assert "every source is traceable" in skill_guide
     assert "clickable original URL" in skill_guide
     assert "attach the original file" in skill_guide
     assert "local path is not a traceable source" in skill_guide
