@@ -8,10 +8,13 @@ from typing import Annotated, Any
 
 from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
+from fastapi.openapi.utils import get_openapi
 
 from file2doc.audio import AudioParseOptions
 from file2doc.rendering import AGENT_PAGE_IMAGE_DPI, ALLOWED_PAGE_IMAGE_DPI
 from file2doc.store import JobStore
+from file2doc.version import SERVICE_VERSION, skill_version_payload, with_version_metadata
 
 
 def create_app(
@@ -28,9 +31,16 @@ def create_app(
         audio_parse_options=audio_parse_options,
         video_frame_extractor=video_frame_extractor,
     )
-    app = FastAPI(title="File2Doc", version="0.1.0")
+    app = FastAPI(
+        title="File2Doc",
+        version=SERVICE_VERSION,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
     app.state.file2doc_background_tasks = set()
-    job_semaphore = asyncio.Semaphore(_configured_max_concurrent_jobs())
+    max_concurrent_jobs = _configured_max_concurrent_jobs()
+    job_semaphore = asyncio.Semaphore(max_concurrent_jobs)
 
     async def require_auth(authorization: Annotated[str | None, Header()] = None) -> None:
         if not auth_enabled:
@@ -39,9 +49,38 @@ def create_app(
         if expected is None or authorization != expected:
             raise HTTPException(status_code=401, detail={"code": "unauthorized"})
 
+    @app.get("/openapi.json", include_in_schema=False, dependencies=[Depends(require_auth)])
+    async def openapi_schema() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        app.openapi_schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            routes=app.routes,
+        )
+        return app.openapi_schema
+
+    @app.get("/docs", include_in_schema=False, dependencies=[Depends(require_auth)])
+    async def swagger_ui():
+        return get_swagger_ui_html(
+            openapi_url="/openapi.json",
+            title=f"{app.title} - Swagger UI",
+        )
+
+    @app.get("/redoc", include_in_schema=False, dependencies=[Depends(require_auth)])
+    async def redoc():
+        return get_redoc_html(
+            openapi_url="/openapi.json",
+            title=f"{app.title} - ReDoc",
+        )
+
     @app.get("/healthz")
     async def healthz() -> dict:
-        return {"status": "ok", "service": "file2doc"}
+        return {
+            "status": "ok",
+            "service": "file2doc",
+            "service_version": SERVICE_VERSION,
+        }
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
@@ -49,6 +88,7 @@ def create_app(
             "storage_root": _check_storage_root(root),
             "sqlite": _check_sqlite(store),
         }
+        asr_engine = _configured_asr_engine(audio_parse_options)
         asr_model_dir = _configured_asr_model_dir(audio_parse_options)
         status = (
             "ok"
@@ -59,7 +99,12 @@ def create_app(
             status_code=200 if status == "ok" else 503,
             content={
                 "status": status,
-                "local_asr_model_present": _local_asr_model_present(asr_model_dir),
+                "service_version": SERVICE_VERSION,
+                "local_asr_engine": asr_engine,
+                "local_asr_model_present": _local_asr_model_present(
+                    asr_model_dir,
+                    asr_engine,
+                ),
                 "ffmpeg_available": _ffmpeg_available(),
                 "checks": checks,
             },
@@ -67,13 +112,18 @@ def create_app(
 
     @app.get("/capabilities")
     async def capabilities() -> dict:
+        asr_engine = _configured_asr_engine(audio_parse_options)
         asr_model_dir = _configured_asr_model_dir(audio_parse_options)
         response = {
+            "service_version": SERVICE_VERSION,
             "supported_source_groups": ["pdf", "office", "text", "audio", "video"],
             "auth_required": auth_enabled,
             "storage_root": str(root),
+            "local_asr_engine": asr_engine,
             "local_asr_configured": asr_model_dir is not None,
-            "local_asr_model_present": _local_asr_model_present(asr_model_dir),
+            "local_asr_model_present": _local_asr_model_present(asr_model_dir, asr_engine),
+            "transcript_segments_supported": True,
+            "transcript_timestamps_supported": asr_engine == "funasr-local",
             "ffmpeg_available": _ffmpeg_available(),
             "remote_ocr_configured": _remote_ocr_configured(),
             "page_image_dpi_options": sorted(ALLOWED_PAGE_IMAGE_DPI),
@@ -84,11 +134,37 @@ def create_app(
             response["max_upload_size_mb"] = max_upload_size_mb
         return response
 
+    @app.get("/skills/file2doc-http/version.json")
+    async def file2doc_skill_version(installed_version: str | None = None) -> dict:
+        return skill_version_payload(installed_version)
+
+    @app.get("/metrics")
+    async def metrics() -> dict:
+        jobs = store.read_all_jobs()
+        counts = _job_status_counts(jobs)
+        return {
+            "jobs": {
+                "queued": counts["queued"],
+                "running": counts["running"],
+                "completed": counts["completed"],
+                "completed_with_warnings": counts["completed_with_warnings"],
+                "failed": counts["failed"],
+                "expired": counts["expired"],
+                "total": len(jobs),
+                "max_concurrent": max_concurrent_jobs,
+                "active_background_tasks": len(app.state.file2doc_background_tasks),
+            }
+        }
+
     @app.post("/parse-jobs/upload", status_code=201, dependencies=[Depends(require_auth)])
     async def upload_parse_job(
         file: Annotated[UploadFile, File()],
         parser_profile: Annotated[str, Form()] = "agent",
         retention: Annotated[str, Form()] = "standard",
+        skill_version: Annotated[
+            str | None,
+            Header(alias="X-File2Doc-Skill-Version"),
+        ] = None,
     ) -> dict:
         job = store.create_job(
             filename=file.filename or "source",
@@ -98,7 +174,7 @@ def create_app(
             retention=retention,
         )
         _schedule_job_completion(job["job_id"])
-        return job
+        return with_version_metadata(job, skill_version)
 
     def _schedule_job_completion(job_id: str) -> None:
         task = asyncio.create_task(_run_job_completion(job_id))
@@ -113,21 +189,34 @@ def create_app(
                 store.fail_job(job_id, "job_execution_failed", str(error))
 
     @app.get("/parse-jobs/{job_id}", dependencies=[Depends(require_auth)])
-    async def get_parse_job(job_id: str) -> dict:
-        return store.read_job(job_id)
+    async def get_parse_job(
+        job_id: str,
+        skill_version: Annotated[
+            str | None,
+            Header(alias="X-File2Doc-Skill-Version"),
+        ] = None,
+    ) -> dict:
+        job = _with_queue_metadata(store.read_job(job_id), store.read_all_jobs())
+        return with_version_metadata(job, skill_version)
 
     @app.get("/parse-jobs/{job_id}/events", dependencies=[Depends(require_auth)])
     async def get_parse_job_events(job_id: str, after: str | None = None) -> dict:
         return store.read_events(job_id, after=after)
 
     @app.get("/parse-jobs/{job_id}/result", dependencies=[Depends(require_auth)])
-    async def get_parse_result(job_id: str) -> dict:
+    async def get_parse_result(
+        job_id: str,
+        skill_version: Annotated[
+            str | None,
+            Header(alias="X-File2Doc-Skill-Version"),
+        ] = None,
+    ) -> dict:
         job = store.read_job(job_id)
         if job["status"] == "expired":
             raise HTTPException(status_code=410, detail={"code": "result_expired"})
         if job["status"] not in {"completed", "completed_with_warnings"}:
             raise HTTPException(status_code=409, detail={"code": "result_not_ready"})
-        return store.read_manifest(job_id)
+        return with_version_metadata(store.read_manifest(job_id), skill_version)
 
     @app.get("/parse-jobs/{job_id}/artifacts/{artifact_id}", dependencies=[Depends(require_auth)])
     async def get_artifact(job_id: str, artifact_id: str) -> FileResponse:
@@ -206,18 +295,25 @@ def _configured_asr_model_dir(options: AudioParseOptions | None) -> Path | None:
     return Path(configured)
 
 
-def _local_asr_model_present(model_dir: Path | None) -> bool:
+def _configured_asr_engine(options: AudioParseOptions | None) -> str:
+    configured = None
+    if options is not None:
+        configured = options.engine
+    configured = configured or os.environ.get("FILE2DOC_LOCAL_ASR_ENGINE")
+    if not configured:
+        return "funasr-local"
+    engine = configured.strip().lower()
+    if engine == "funasr":
+        return "funasr-local"
+    return engine
+
+
+def _local_asr_model_present(model_dir: Path | None, engine: str = "funasr-local") -> bool:
     if model_dir is None:
         return False
-    candidates = [
-        model_dir,
-        model_dir / "sherpa-onnx-paraformer-zh-2023-03-28",
-    ]
-    return any(
-        (candidate / "model.int8.onnx").is_file()
-        and (candidate / "tokens.txt").is_file()
-        for candidate in candidates
-    )
+    if engine == "funasr-local":
+        return model_dir.exists()
+    return False
 
 
 def _ffmpeg_available() -> bool:
@@ -261,3 +357,44 @@ def _configured_max_concurrent_jobs() -> int:
         return max(1, int(configured))
     except ValueError:
         return 2
+
+
+def _job_status_counts(jobs: list[dict]) -> dict[str, int]:
+    counts = {
+        "queued": 0,
+        "running": 0,
+        "completed": 0,
+        "completed_with_warnings": 0,
+        "failed": 0,
+        "expired": 0,
+    }
+    for job in jobs:
+        status = job.get("status")
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _with_queue_metadata(job: dict, jobs: list[dict]) -> dict:
+    status = job.get("status")
+    if status == "queued":
+        queued_jobs = sorted(
+            (
+                candidate
+                for candidate in jobs
+                if candidate.get("status") == "queued"
+            ),
+            key=lambda candidate: (candidate.get("created_at", ""), candidate.get("job_id", "")),
+        )
+        position = next(
+            (
+                index
+                for index, candidate in enumerate(queued_jobs, start=1)
+                if candidate.get("job_id") == job.get("job_id")
+            ),
+            None,
+        )
+        return job | {"queue": {"state": "queued", "position": position}}
+    if status == "running":
+        return job | {"queue": {"state": "running", "position": None}}
+    return job | {"queue": {"state": "terminal", "position": None}}

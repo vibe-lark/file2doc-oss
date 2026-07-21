@@ -91,8 +91,10 @@ def test_k8s_manifests_define_cpu_only_file2doc_deployment() -> None:
         {"name": "FILE2DOC_OCR_TIMEOUT_SECONDS", "value": "300"},
         {
             "name": "FILE2DOC_LOCAL_ASR_MODEL_DIR",
-            "value": "/data/file2doc/models/sherpa-paraformer-zh",
+            "value": "/data/file2doc/models/funasr",
         },
+        {"name": "FILE2DOC_LOCAL_ASR_ENGINE", "value": "funasr-local"},
+        {"name": "FILE2DOC_FUNASR_BATCH_SIZE_SECONDS", "value": "30"},
         {
             "name": "FILE2DOC_OCR_MODEL",
             "valueFrom": {

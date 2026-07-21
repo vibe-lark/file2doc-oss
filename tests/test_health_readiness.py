@@ -9,8 +9,6 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
 ):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
-    (model_dir / "model.int8.onnx").write_text("model", encoding="utf-8")
-    (model_dir / "tokens.txt").write_text("tokens", encoding="utf-8")
     monkeypatch.setenv("FILE2DOC_OCR_API_KEY", "secret")
     monkeypatch.setenv("FILE2DOC_OCR_BASE_URL", "https://ocr.example.test")
     monkeypatch.setenv("FILE2DOC_OCR_MODEL", "doubao-ocr")
@@ -27,11 +25,15 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
 
     assert response.status_code == 200
     assert response.json() == {
+        "service_version": "0.1.21",
         "supported_source_groups": ["pdf", "office", "text", "audio", "video"],
         "auth_required": True,
         "storage_root": str(tmp_path / "storage"),
+        "local_asr_engine": "funasr-local",
         "local_asr_configured": True,
         "local_asr_model_present": True,
+        "transcript_segments_supported": True,
+        "transcript_timestamps_supported": True,
         "ffmpeg_available": True,
         "remote_ocr_configured": True,
         "page_image_dpi_options": [144, 216, 288],
@@ -47,7 +49,11 @@ def test_healthz_is_public_and_returns_service_status(tmp_path):
     response = client.get("/healthz")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "service": "file2doc"}
+    assert response.json() == {
+        "status": "ok",
+        "service": "file2doc",
+        "service_version": "0.1.21",
+    }
 
 
 def test_readyz_is_public_and_checks_storage_and_sqlite(tmp_path, monkeypatch):
@@ -61,6 +67,8 @@ def test_readyz_is_public_and_checks_storage_and_sqlite(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
+        "service_version": "0.1.21",
+        "local_asr_engine": "funasr-local",
         "local_asr_model_present": False,
         "ffmpeg_available": True,
         "checks": {
@@ -100,6 +108,20 @@ def test_readyz_returns_unavailable_when_sqlite_cannot_round_trip(tmp_path):
     assert response.json()["checks"]["storage_root"] == {"status": "ok"}
     assert response.json()["checks"]["sqlite"]["status"] == "error"
     assert response.json()["checks"]["sqlite"]["detail"]
+
+
+def test_skill_version_endpoint_reports_installed_version_status(tmp_path):
+    client = TestClient(create_app(storage_root=tmp_path, auth_enabled=True))
+
+    response = client.get(
+        "/skills/file2doc-http/version.json",
+        params={"installed_version": "0.1.20"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["service_version"] == "0.1.21"
+    assert response.json()["skill"]["update_available"] is True
+    assert response.json()["skill"]["update_required"] is False
 
 
 def test_readyz_returns_unavailable_when_storage_root_is_not_writable(tmp_path):

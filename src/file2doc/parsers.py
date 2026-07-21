@@ -59,10 +59,7 @@ class ParseOptions:
             return self.ocr_runner(source_path, self)
 
         if not self.ocr_model or not self.ocr_api_key:
-            raise ParseFailure(
-                "empty_parse_result",
-                "MarkItDown produced no usable Markdown and OCR is not configured",
-            )
+            return ""
 
         return _run_direct_pdf_vision_ocr_with_timeout(source_path, self)
 
@@ -95,7 +92,13 @@ def parse_content_markdown(
     if not content:
         if _is_pdf(content_type) and parse_options.ocr_configured:
             return _parse_pdf_with_ocr(source_path, parse_options, started_at)
-        raise ParseFailure("empty_parse_result", "MarkItDown produced no usable Markdown")
+        return _empty_parsed_content(
+            name="markitdown",
+            version=_package_version("markitdown"),
+            elapsed_ms=_elapsed_ms(started_at),
+            ocr_used=False,
+            remote_services_used=False,
+        )
     return ParsedContent(
         markdown=content + "\n",
         diagnostics=_diagnostics(
@@ -118,11 +121,8 @@ def _parse_pdf_with_ocr(
     except Exception as error:  # pragma: no cover - exact remote client errors vary.
         raise ParseFailure("remote_ocr_failed", f"OCR recovery failed: {error}") from error
 
-    if not content:
-        raise ParseFailure("remote_ocr_failed", "OCR recovery produced no usable Markdown")
-
     return ParsedContent(
-        markdown=content + "\n",
+        markdown=f"{content}\n" if content else "",
         diagnostics=_diagnostics(
             name=(
                 "markitdown-ocr"
@@ -133,6 +133,7 @@ def _parse_pdf_with_ocr(
             elapsed_ms=_elapsed_ms(started_at),
             ocr_used=True,
             remote_services_used=True,
+            empty_result=not content,
         ),
     )
 
@@ -302,10 +303,7 @@ def _run_direct_pdf_vision_ocr(source_path: Path, options: ParseOptions) -> str:
         ) from error
 
     if not options.ocr_model or not options.ocr_api_key:
-        raise ParseFailure(
-            "empty_parse_result",
-            "MarkItDown produced no usable Markdown and OCR is not configured",
-        )
+        return ""
 
     client_kwargs = {
         "api_key": options.ocr_api_key,
@@ -370,6 +368,7 @@ def _diagnostics(
     elapsed_ms: float,
     ocr_used: bool = False,
     remote_services_used: bool = False,
+    empty_result: bool = False,
 ) -> dict:
     return {
         "name": name,
@@ -377,7 +376,29 @@ def _diagnostics(
         "elapsed_ms": elapsed_ms,
         "ocr_used": ocr_used,
         "remote_services_used": remote_services_used,
+        "empty_result": empty_result,
     }
+
+
+def _empty_parsed_content(
+    *,
+    name: str,
+    version: str | None,
+    elapsed_ms: float,
+    ocr_used: bool,
+    remote_services_used: bool,
+) -> ParsedContent:
+    return ParsedContent(
+        markdown="",
+        diagnostics=_diagnostics(
+            name=name,
+            version=version,
+            elapsed_ms=elapsed_ms,
+            ocr_used=ocr_used,
+            remote_services_used=remote_services_used,
+            empty_result=True,
+        ),
+    )
 
 
 def _elapsed_ms(started_at: float) -> float:

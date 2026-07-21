@@ -1,9 +1,8 @@
 [project]
 name = "file2doc"
-version = "0.1.0"
+version = "0.1.21"
 description = "HTTP-first offline file parsing service for agent-friendly result packages."
 requires-python = ">=3.12"
-license = "MIT"
 dependencies = [
   "fastapi>=0.111",
   "imageio-ffmpeg>=0.5",
@@ -13,7 +12,7 @@ dependencies = [
   "pillow>=10",
   "pypdfium2>=4.30",
   "python-multipart>=0.0.9",
-  "sherpa-onnx>=1.13",
+  "funasr>=1.2",
   "uvicorn[standard]>=0.30",
 ]
 

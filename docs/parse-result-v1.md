@@ -49,7 +49,7 @@ The first slice must support file uploads. Service-local paths may be implemente
 After the PDF tracer bullet, modality support should be added in this order:
 
 1. Office documents, with PPT/PPTX and Word/DOC/DOCX prioritized after PDF. Excel/XLSX/XLS/CSV remains lower priority.
-2. Video and audio, by adding change-aware frame extraction and local `sherpa-onnx` transcripts.
+2. Video and audio, by adding change-aware frame extraction and local FunASR transcripts.
 3. Excel and CSV, by adding table summaries and table artifacts.
 
 For Office documents, the manifest source remains the original Office file. The converted PDF is a parser artifact, not the source.
@@ -283,7 +283,7 @@ Parser-native outputs may be retained under `parser_artifacts/` for debugging an
   },
   "parser_profile": "agent",
   "parser_versions": {
-    "file2doc": "0.1.0",
+    "file2doc": "0.1.21",
     "markitdown": "unknown",
     "markitdown_ocr": "unknown",
     "asr": "unknown"
@@ -670,4 +670,4 @@ Parser stderr, stack traces, and tool logs may be stored under `diagnostics/` fo
 
 File2Doc v1 minimizes local dependencies by using MarkItDown for local document conversion and an explicitly configured OpenAI-compatible endpoint for OCR. OCR requests may send extracted document images or rendered pages to the configured remote endpoint.
 
-Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription are disabled in v1. Audio and video transcription should use the local `sherpa-onnx` ASR path inherited from `attachment-to-doc-local`.
+Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription are disabled in v1. Audio and video transcription use the local FunASR path.

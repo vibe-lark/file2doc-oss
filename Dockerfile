@@ -9,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MKL_NUM_THREADS=1 \
     NUMEXPR_NUM_THREADS=1 \
     FILE2DOC_STORAGE_ROOT=/data/file2doc \
-    FILE2DOC_LOCAL_ASR_MODEL_DIR=/data/file2doc/models/sherpa-paraformer-zh \
+    FILE2DOC_LOCAL_ASR_MODEL_DIR=/data/file2doc/models/funasr \
+    FILE2DOC_LOCAL_ASR_ENGINE=funasr-local \
     FILE2DOC_AUTH_ENABLED=true
 
 WORKDIR /app
@@ -21,7 +22,14 @@ RUN useradd --create-home --shell /usr/sbin/nologin file2doc \
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir \
+    -i https://mirrors.aliyun.com/pypi/simple \
+    --trusted-host mirrors.aliyun.com \
+    . \
+    && pip install --no-cache-dir \
+    --index-url https://download.pytorch.org/whl/cpu \
+    torch==2.6.0+cpu \
+    torchaudio==2.6.0+cpu
 
 USER file2doc
 EXPOSE 8000

@@ -109,7 +109,7 @@ def test_uploaded_xlsx_produces_non_empty_markitdown_markdown(tmp_path):
     assert "beta spreadsheet" in content
 
 
-def test_uploaded_docx_with_no_extracted_markdown_fails_visibly(tmp_path):
+def test_uploaded_docx_with_no_extracted_markdown_returns_empty_result(tmp_path):
     sample = tmp_path / "blank-office-support.docx"
     Document().save(sample)
     client = TestClient(create_app(storage_root=tmp_path / "storage", auth_enabled=False))
@@ -126,14 +126,18 @@ def test_uploaded_docx_with_no_extracted_markdown_fails_visibly(tmp_path):
     ).json()
     job = client.get(created["poll_url"]).json()
 
-    assert job["status"] == "failed"
-    assert job["stage"] == "failed"
-    assert job["error"]["code"] == "empty_parse_result"
-    assert job["result"] is None
+    assert job["status"] == "completed"
+    assert job["stage"] == "completed"
+    assert job["error"] is None
 
-    manifest_response = client.get(f"/parse-jobs/{created['job_id']}/result")
-    assert manifest_response.status_code == 409
-    assert manifest_response.json()["detail"]["code"] == "result_not_ready"
+    manifest_response = client.get(job["result"]["manifest_url"])
+    assert manifest_response.status_code == 200
+    manifest = manifest_response.json()
+    assert manifest["parser"]["empty_result"] is True
+
+    content_response = client.get(job["result"]["content_url"])
+    assert content_response.status_code == 200
+    assert content_response.text == ""
 
 
 def test_uploaded_pptx_produces_non_empty_markitdown_markdown(tmp_path):

@@ -24,6 +24,7 @@ from file2doc.rendering import (
     render_pdf_visual_assets,
 )
 from file2doc.video import VideoFrameExtractionError, VideoToolUnavailable, extract_video_frames
+from file2doc.version import skill_version_payload
 
 SCHEMA_VERSION = "file2doc.parse-result.v1"
 VideoFrameExtractor = Callable[..., dict]
@@ -115,7 +116,8 @@ class JobStore:
             self._complete_video_job(job, source_path, result_root)
             return
 
-        self._append_event(job_id, "parser_started", 30, "Parser started")
+        self.mark_job_running(job_id, "parser_started", 30, "Parser started")
+        job = self.read_job(job_id)
         try:
             parsed = parse_content_markdown(source_path, content_type)
         except ParseFailure as error:
@@ -144,9 +146,11 @@ class JobStore:
             )
             artifacts.update(visual_artifacts)
 
-        self._append_event(job_id, "assembling", 80, "Assembling result package")
+        self.mark_job_running(job_id, "assembling", 80, "Assembling result package")
+        job = self.read_job(job_id)
         manifest = {
             "schema_version": SCHEMA_VERSION,
+            **skill_version_payload(),
             "job_id": job_id,
             "source": job["source"],
             "options": {
@@ -190,7 +194,8 @@ class JobStore:
         self._append_event(job_id, "completed", 100, "Result package assembled")
 
     def _complete_audio_job(self, job: dict, source_path: Path, result_root: Path) -> None:
-        self._append_event(job["job_id"], "asr_running", 30, "ASR transcription running")
+        self.mark_job_running(job["job_id"], "asr_running", 30, "ASR transcription running")
+        job = self.read_job(job["job_id"])
         try:
             transcript = parse_audio_transcript(
                 source_path,
@@ -201,8 +206,10 @@ class JobStore:
             self._fail_job(job, error.code, str(error))
             return
 
-        content_markdown = _transcript_markdown(transcript.text)
-        self._append_event(job["job_id"], "assembling", 80, "Assembling result package")
+        manifest_transcript = transcript.to_manifest_transcript()
+        content_markdown = _transcript_markdown(manifest_transcript)
+        self.mark_job_running(job["job_id"], "assembling", 80, "Assembling result package")
+        job = self.read_job(job["job_id"])
         self._write_media_result(
             job,
             result_root,
@@ -212,16 +219,17 @@ class JobStore:
                 "engine": transcript.engine,
                 **transcript.diagnostics,
             },
-            transcript=transcript.to_manifest_transcript(),
+            transcript=manifest_transcript,
             page_index=[],
             media_index=[],
             timeline=[],
             artifacts={},
-            warnings=_transcript_warnings(transcript.to_manifest_transcript()),
+            warnings=_transcript_warnings(manifest_transcript),
         )
 
     def _complete_video_job(self, job: dict, source_path: Path, result_root: Path) -> None:
-        self._append_event(job["job_id"], "asr_running", 30, "ASR transcription running")
+        self.mark_job_running(job["job_id"], "asr_running", 30, "ASR transcription running")
+        job = self.read_job(job["job_id"])
         try:
             transcript = parse_audio_transcript(
                 source_path,
@@ -233,7 +241,13 @@ class JobStore:
             return
 
         frame_root = result_root / "images" / "video_frames"
-        self._append_event(job["job_id"], "video_frame_extracting", 60, "Video frame extraction running")
+        self.mark_job_running(
+            job["job_id"],
+            "video_frame_extracting",
+            60,
+            "Video frame extraction running",
+        )
+        job = self.read_job(job["job_id"])
         try:
             frame_result = self.video_frame_extractor(
                 source_path,
@@ -245,8 +259,10 @@ class JobStore:
             return
 
         frame_result = _prefix_video_frame_paths(frame_result, "images/video_frames")
-        content_markdown = _video_markdown(transcript.text, frame_result["media_index"])
-        self._append_event(job["job_id"], "assembling", 80, "Assembling result package")
+        manifest_transcript = transcript.to_manifest_transcript()
+        content_markdown = _video_markdown(manifest_transcript, frame_result["media_index"])
+        self.mark_job_running(job["job_id"], "assembling", 80, "Assembling result package")
+        job = self.read_job(job["job_id"])
         self._write_media_result(
             job,
             result_root,
@@ -256,12 +272,12 @@ class JobStore:
                 "engine": transcript.engine,
                 **transcript.diagnostics,
             },
-            transcript=transcript.to_manifest_transcript(),
+            transcript=manifest_transcript,
             page_index=[],
             media_index=frame_result["media_index"],
             timeline=frame_result["timeline"],
             artifacts=frame_result["artifacts"],
-            warnings=_transcript_warnings(transcript.to_manifest_transcript()),
+            warnings=_transcript_warnings(manifest_transcript),
         )
 
     def _write_media_result(
@@ -321,6 +337,7 @@ class JobStore:
         }
         manifest = {
             "schema_version": SCHEMA_VERSION,
+            **skill_version_payload(),
             "job_id": job_id,
             "source": job["source"],
             "options": {
@@ -387,6 +404,30 @@ class JobStore:
     def fail_job(self, job_id: str, code: str, message: str) -> None:
         self._fail_job(self.read_job(job_id), code, message)
 
+    def mark_job_running(
+        self,
+        job_id: str,
+        stage: str,
+        percent: int,
+        message: str,
+    ) -> None:
+        job = self.read_job(job_id)
+        if job["status"] in {"completed", "completed_with_warnings", "failed", "expired"}:
+            return
+        job["status"] = "running"
+        job["stage"] = stage
+        job["percent"] = percent
+        job["latest_progress"] = {
+            "stage": stage,
+            "percent": percent,
+            "message": message,
+            "detail": {},
+            "created_at": _iso(_now()),
+        }
+        self._persist_job(job)
+        self._write_json(self._job_root(job_id) / "job.json", job)
+        self._append_event(job_id, stage, percent, message)
+
     def read_job(self, job_id: str) -> dict:
         with self._connect() as connection:
             row = connection.execute(
@@ -396,6 +437,11 @@ class JobStore:
         if row is None:
             raise HTTPException(status_code=404, detail={"code": "job_not_found"})
         return json.loads(row["document"])
+
+    def read_all_jobs(self) -> list[dict]:
+        with self._connect() as connection:
+            rows = connection.execute("select document from jobs").fetchall()
+        return [json.loads(row["document"]) for row in rows]
 
     def read_events(self, job_id: str, *, after: str | None = None) -> dict:
         self.read_job(job_id)
@@ -791,15 +837,38 @@ def _is_video_source(source_path: Path, content_type: str) -> bool:
     }
 
 
-def _transcript_markdown(text: str) -> str:
-    return f"# Transcript\n\n{text.strip()}\n"
+def _transcript_markdown(transcript: dict) -> str:
+    lines = ["# Transcript", ""]
+    segments = transcript.get("segments") or []
+    if transcript.get("time_aligned") and segments:
+        for segment in segments:
+            start = _format_time_seconds(segment.get("start_sec"))
+            end = _format_time_seconds(segment.get("end_sec"))
+            lines.extend(
+                [
+                    f"## {start} - {end}",
+                    "",
+                    str(segment.get("text", "")).strip(),
+                    "",
+                ]
+            )
+    else:
+        lines.append(str(transcript.get("text", "")).strip())
+    return "\n".join(lines).rstrip() + "\n"
 
 
-def _video_markdown(text: str, media_index: list[dict]) -> str:
-    lines = ["# Transcript", "", text.strip(), "", "## Key Frames", ""]
+def _video_markdown(transcript: dict, media_index: list[dict]) -> str:
+    lines = [_transcript_markdown(transcript).rstrip(), "", "## Key Frames", ""]
     for media in media_index:
         lines.append(f"- `{media['id']}` at {media['time_seconds']}s: `{media['path']}`")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _format_time_seconds(value) -> str:
+    seconds = float(value or 0)
+    minutes = int(seconds // 60)
+    remaining = seconds - minutes * 60
+    return f"{minutes:02d}:{remaining:05.2f}"
 
 
 def _transcript_warnings(transcript: dict) -> list[dict]:

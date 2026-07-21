@@ -31,6 +31,9 @@ def test_uploaded_text_file_produces_manifest_and_content_artifact(tmp_path):
     assert manifest_response.status_code == 200
     manifest = manifest_response.json()
     assert manifest["schema_version"] == "file2doc.parse-result.v1"
+    assert manifest["service_version"] == "0.1.21"
+    assert manifest["skill"]["latest_version"] == "0.1.21"
+    assert manifest["notices"][0]["code"] == "skill_version_unknown"
     assert manifest["source"]["filename"] == "hello.txt"
     assert manifest["content"]["artifact_id"] == job["result"]["content_artifact_id"]
     assert manifest["content"]["path"] == "content.md"
@@ -38,3 +41,23 @@ def test_uploaded_text_file_produces_manifest_and_content_artifact(tmp_path):
     content_response = client.get(job["result"]["content_url"])
     assert content_response.status_code == 200
     assert content_response.text == "# Hello\n\nUploaded through File2Doc.\n"
+
+
+def test_upload_and_status_compare_installed_skill_version(tmp_path):
+    client = TestClient(create_app(storage_root=tmp_path, auth_enabled=False))
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("hello.txt", b"hello agent", "text/plain")},
+        headers={"X-File2Doc-Skill-Version": "0.1.20"},
+    ).json()
+
+    assert created["skill"]["update_available"] is True
+    assert created["skill"]["update_required"] is False
+    assert created["notices"][0]["code"] == "skill_update_available"
+
+    job = client.get(
+        f"/parse-jobs/{created['job_id']}",
+        headers={"X-File2Doc-Skill-Version": "0.1.21"},
+    ).json()
+    assert job["skill"]["status"] == "current"
+    assert job["notices"] == []

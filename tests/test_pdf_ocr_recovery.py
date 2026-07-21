@@ -20,7 +20,7 @@ def test_empty_pdf_uses_configured_ocr_recovery(tmp_path):
 
     def fake_ocr_runner(source_path, options):
         assert source_path == source
-        return "# Example Contact\n\nCall 555-0100."
+        return "# Service Desk Contact\n\nCall 555-0100."
 
     parsed = parse_content_markdown(
         source,
@@ -31,24 +31,25 @@ def test_empty_pdf_uses_configured_ocr_recovery(tmp_path):
         ),
     )
 
-    assert parsed.markdown == "# Example Contact\n\nCall 555-0100.\n"
+    assert parsed.markdown == "# Service Desk Contact\n\nCall 555-0100.\n"
     assert parsed.diagnostics["name"] == "markitdown-ocr"
     assert parsed.diagnostics["ocr_used"] is True
     assert parsed.diagnostics["remote_services_used"] is True
 
 
-def test_empty_pdf_without_ocr_configuration_keeps_empty_parse_failure(tmp_path):
+def test_empty_pdf_without_ocr_configuration_returns_empty_result(tmp_path):
     source = tmp_path / "scan.pdf"
     source.write_bytes(b"%PDF-1.7\n")
 
-    with pytest.raises(ParseFailure) as failure:
-        parse_content_markdown(
-            source,
-            "application/pdf",
-            ParseOptions(markitdown_factory=lambda: EmptyMarkItDown()),
-        )
+    parsed = parse_content_markdown(
+        source,
+        "application/pdf",
+        ParseOptions(markitdown_factory=lambda: EmptyMarkItDown()),
+    )
 
-    assert failure.value.code == "empty_parse_result"
+    assert parsed.markdown == ""
+    assert parsed.diagnostics["name"] == "markitdown"
+    assert parsed.diagnostics["empty_result"] is True
 
 
 def test_empty_pdf_with_failing_ocr_reports_ocr_failure(tmp_path):
@@ -69,6 +70,26 @@ def test_empty_pdf_with_failing_ocr_reports_ocr_failure(tmp_path):
         )
 
     assert failure.value.code == "remote_ocr_failed"
+
+
+def test_empty_pdf_with_empty_ocr_returns_empty_result(tmp_path):
+    source = tmp_path / "scan.pdf"
+    source.write_bytes(b"%PDF-1.7\n")
+
+    parsed = parse_content_markdown(
+        source,
+        "application/pdf",
+        ParseOptions(
+            markitdown_factory=lambda: EmptyMarkItDown(),
+            ocr_runner=lambda source_path, options: "   ",
+        ),
+    )
+
+    assert parsed.markdown == ""
+    assert parsed.diagnostics["name"] == "markitdown-ocr"
+    assert parsed.diagnostics["ocr_used"] is True
+    assert parsed.diagnostics["remote_services_used"] is True
+    assert parsed.diagnostics["empty_result"] is True
 
 
 def test_remote_ocr_client_uses_configured_timeout(tmp_path, monkeypatch):

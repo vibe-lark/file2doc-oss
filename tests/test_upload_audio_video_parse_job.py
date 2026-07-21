@@ -64,6 +64,35 @@ def test_uploaded_audio_with_local_asr_runner_produces_transcript_artifacts(tmp_
     assert "audio transcript marker" in content
 
 
+def test_uploaded_audio_with_empty_asr_result_completes_with_empty_transcript(tmp_path):
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            audio_parse_options=AudioParseOptions(
+                model_dir=tmp_path / "model",
+                runner=lambda source_path, options: {"text": "   ", "engine": "fake-local-asr"},
+            ),
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("meeting.wav", b"not a real wav", "audio/wav")},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "completed"
+    assert job["error"] is None
+    manifest = client.get(job["result"]["manifest_url"]).json()
+    assert manifest["parser"]["empty_result"] is True
+    assert manifest["transcript"]["text"] == ""
+    assert manifest["transcript"]["segments"] == []
+
+    content = client.get(job["result"]["content_url"]).text
+    assert content == "# Transcript\n"
+
+
 def test_uploaded_video_produces_transcript_frames_and_timeline(tmp_path):
     def fake_runner(source_path: Path, options: AudioParseOptions):
         assert source_path.name == "demo.mp4"
@@ -145,3 +174,72 @@ def test_uploaded_video_produces_transcript_frames_and_timeline(tmp_path):
     frame = client.get(f"/parse-jobs/{created['job_id']}/artifacts/{frame_artifact['artifact_id']}")
     assert frame.status_code == 200
     assert frame.content == b"frame"
+
+
+def test_uploaded_video_with_empty_asr_result_still_extracts_frames(tmp_path):
+    def fake_video_extractor(source_path: Path, output_dir: Path, **kwargs):
+        artifact_id = kwargs["new_artifact_id"]()
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "frame_001.jpg").write_bytes(b"frame")
+        return {
+            "media_index": [
+                {
+                    "id": "video-frame-001",
+                    "kind": "video_frame",
+                    "path": "frame_001.jpg",
+                    "artifact_id": artifact_id,
+                    "media_type": "image/jpeg",
+                    "source_ref": {"type": "video_time", "time_seconds": 1.0},
+                    "derived": False,
+                    "time_seconds": 1.0,
+                    "width": 640,
+                    "height": 360,
+                }
+            ],
+            "timeline": [
+                {
+                    "id": "video-frame-001",
+                    "kind": "video_frame",
+                    "time_seconds": 1.0,
+                    "media_id": "video-frame-001",
+                    "artifact_id": artifact_id,
+                    "path": "frame_001.jpg",
+                }
+            ],
+            "artifacts": {
+                artifact_id: {
+                    "artifact_id": artifact_id,
+                    "kind": "video_frame",
+                    "path": "frame_001.jpg",
+                    "media_type": "image/jpeg",
+                    "time_seconds": 1.0,
+                    "derived": False,
+                }
+            },
+        }
+
+    client = TestClient(
+        create_app(
+            storage_root=tmp_path,
+            auth_enabled=False,
+            audio_parse_options=AudioParseOptions(
+                model_dir=tmp_path / "model",
+                runner=lambda source_path, options: {"text": "", "engine": "fake-video-asr"},
+            ),
+            video_frame_extractor=fake_video_extractor,
+        )
+    )
+
+    created = client.post(
+        "/parse-jobs/upload",
+        files={"file": ("demo.mp4", b"not a real mp4", "video/mp4")},
+    ).json()
+    job = client.get(created["poll_url"]).json()
+
+    assert job["status"] == "completed"
+    assert job["error"] is None
+    manifest = client.get(job["result"]["manifest_url"]).json()
+    assert manifest["parser"]["empty_result"] is True
+    assert manifest["transcript"]["text"] == ""
+    assert manifest["media_index"][0]["id"] == "video-frame-001"
+    assert manifest["timeline"][0]["media_id"] == "video-frame-001"

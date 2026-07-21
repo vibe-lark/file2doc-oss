@@ -1,113 +1,113 @@
 ---
 name: file2doc-http
-description: Use File2Doc HTTP API to parse offline files and retrieve result package artifacts for agents.
+description: Parse offline files with the File2Doc HTTP API and retrieve Markdown, manifest, media artifacts, transcripts, and video frames. Use when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
+version: 0.1.21
 ---
 
-# File2Doc HTTP Skill
+# File2Doc HTTP
 
-Use this skill when an agent needs to turn a local PDF, PPTX, Office document,
-audio file, or video file into Markdown and downloadable media artifacts through
-File2Doc. The CLI is deferred; call HTTP directly.
+## Quick Start
 
-## Inputs
-
-- `BASE_URL`: local `http://127.0.0.1:8000` or your deployed File2Doc base URL,
-  such as `https://file2doc.example.com`.
-- `FILE2DOC_BEARER_TOKEN`: required only when the deployment has auth enabled.
-- Local file bytes. Download remote files yourself before calling File2Doc.
-
-## Retrieval Flow
-
-1. Upload with `POST /parse-jobs/upload`.
-2. Poll `GET /parse-jobs/{job_id}` until `status` is `completed`,
-   `completed_with_warnings`, or `failed`.
-3. If failed, inspect `error.code`. For `empty_parse_result`, stop artifact
-   retrieval because there is no result package.
-4. Fetch the manifest with `GET /parse-jobs/{job_id}/result`.
-5. Read `content.artifact_id`.
-6. Download Markdown from
-   `/parse-jobs/{job_id}/artifacts/{artifact_id}`.
-7. For targeted media, use the `artifacts/media_index` flow: choose an item from
-   `media_index`, read its `artifact_id`, then download that artifact endpoint.
-8. Use `/parse-jobs/{job_id}/package` only when a full zip package is needed.
-
-## HTTP Calls
+Use File2Doc for local files only. Download remote attachments first, then upload
+the local file bytes.
 
 ```bash
-BASE_URL=${BASE_URL:-http://127.0.0.1:8000}
-AUTH_HEADER=()
-if [ -n "${FILE2DOC_BEARER_TOKEN:-}" ]; then
-  AUTH_HEADER=(-H "Authorization: Bearer ${FILE2DOC_BEARER_TOKEN}")
-fi
+BASE_URL=${BASE_URL:-https://file2doc.solutionsuite.cn}
+SKILL_VERSION=0.1.21
+
+curl -fsS "$BASE_URL/skills/file2doc-http/version.json?installed_version=$SKILL_VERSION"
 
 curl -sS -X POST "$BASE_URL/parse-jobs/upload" \
-  "${AUTH_HEADER[@]}" \
+  -H "X-File2Doc-Skill-Version: $SKILL_VERSION" \
   -F 'file=@./report.pdf;type=application/pdf' \
   -F 'parser_profile=agent' \
   -F 'retention=short'
-
-curl -sS "$BASE_URL/parse-jobs/job_abc123" "${AUTH_HEADER[@]}"
-curl -sS "$BASE_URL/parse-jobs/job_abc123/result" "${AUTH_HEADER[@]}"
-curl -sS "$BASE_URL/parse-jobs/job_abc123/artifacts/art_content" "${AUTH_HEADER[@]}"
 ```
 
-## Manifest Contract
+For production, do not ask users for `FILE2DOC_BEARER_TOKEN`. The public
+gateway injects the internal bearer token before proxying to the private
+File2Doc service. For local development, set `BASE_URL=http://127.0.0.1:8000`;
+only include `Authorization: Bearer ...` when the local service is explicitly
+started with auth enabled.
 
-Trust the manifest over guessed paths:
+## Workflow
 
-- `content` is an object with `artifact_id`, `path`, and `media_type`.
-- `artifacts` is an array of artifact objects, not a map.
+1. Check `/skills/file2doc-http/version.json` once at the start of each task. If
+   `update_required` is true, show the supplied update command and stop. If only
+   `update_available` is true, mention it without blocking the task.
+2. Upload with `POST /parse-jobs/upload` and send
+   `X-File2Doc-Skill-Version: 0.1.21` on upload, status, and result requests.
+3. Poll `GET /parse-jobs/{job_id}` until `completed`,
+   `completed_with_warnings`, or `failed`.
+4. If failed, read `error.code` and stop result retrieval because no package
+   exists.
+5. Fetch the manifest with `GET /parse-jobs/{job_id}/result`.
+6. Read `content.artifact_id`.
+7. Download Markdown with
+   `GET /parse-jobs/{job_id}/artifacts/{artifact_id}`.
+8. For media, choose items from `media_index` and download each item's
+   `artifact_id` through the same artifact endpoint.
+9. Use `GET /parse-jobs/{job_id}/package` only for full zip export or debugging.
+
+## Contract
+
+Trust the manifest over guessed paths.
+
+- `content` points to the primary Markdown artifact.
+- `artifacts` is an array, not a map.
 - `media_index` lists page images, thumbnails, embedded images, and video frames.
-- Artifact downloads always use
-  `/parse-jobs/{job_id}/artifacts/{artifact_id}`.
-
-Minimal shape:
-
-```json
-{
-  "schema_version": "file2doc.parse-result.v1",
-  "job_id": "job_abc123",
-  "content": {
-    "artifact_id": "art_content",
-    "path": "content.md",
-    "media_type": "text/markdown; charset=utf-8"
-  },
-  "media_index": [],
-  "artifacts": [
-    {
-      "artifact_id": "art_content",
-      "kind": "content_markdown",
-      "path": "content.md",
-      "media_type": "text/markdown; charset=utf-8"
-    }
-  ]
-}
-```
+- `timeline` contains video frame time anchors.
+- `transcript.segments` is the structured ASR output for audio and video.
+- Empty parser, OCR, or ASR output is a completed result with empty artifacts
+  and `parser.empty_result: true`, not a failed job.
+- In production, ASR uses local FunASR and should emit sentence-level
+  `start_sec`, `end_sec`, and `text`.
+- Prefer `transcripts/segments.json` over parsing transcript text from
+  `content.md`.
 
 ## Modality Notes
 
-- PDF: expect Markdown content and, when rendering succeeds, page images and
-  thumbnails in `media_index`.
-- PPTX and Office: expect Markdown content from MarkItDown; visual assets depend
-  on available conversion/rendering support.
-- Audio: expect Markdown content plus `transcript` and transcript artifacts.
-- Video: expect Markdown content, `transcript`, selected frames in `media_index`,
-  and time anchors in `timeline`.
+- PDF: use Markdown plus page images or thumbnails when available.
+- Office: use Markdown; visual assets depend on parser support.
+- Audio: use Markdown plus `transcript` artifacts.
+- Video: use transcript, `timeline`, and selected `video_frame` artifacts.
+  Frame extraction scans time coverage and scene changes, filters low-information
+  or blurry candidates, and removes perceptual near-duplicates. The output count
+  follows visual changes and is not capped at a fixed 48.
 
-## Failure Handling
+## Install And Update
 
-If polling returns:
+Install from the repository so the skills manager can update it:
 
-```json
-{
-  "status": "failed",
-  "result": null,
-  "error": {
-    "code": "empty_parse_result",
-    "message": "Parser returned no usable Markdown content."
-  }
-}
+```bash
+npx skills add vibe-lark/file2doc-skill --skill file2doc-http
 ```
 
-Do not call result, content, media, or package endpoints for that job. Report the
-parse failure and ask for a better source file or explicit fallback path.
+For mainland or sandbox environments that cannot reach GitHub, install from the
+File2Doc public gateway:
+
+```bash
+curl -fsSL https://file2doc.solutionsuite.cn/skills/file2doc-http.tar.gz -o /tmp/file2doc-http.tar.gz
+mkdir -p /tmp/file2doc-skill
+tar -xzf /tmp/file2doc-http.tar.gz -C /tmp/file2doc-skill
+npx skills add /tmp/file2doc-skill --skill file2doc-http --copy -y
+```
+
+Or use the hosted installer:
+
+```bash
+curl -fsSL https://file2doc.solutionsuite.cn/skills/file2doc-http/install.sh | sh
+```
+
+Update an installed copy from GitHub:
+
+```bash
+npx skills update file2doc-http
+```
+
+For gateway-installed copies, update by re-running the gateway install command.
+
+## Reference
+
+For full request examples, response shapes, and package retrieval details, see
+`docs/api-examples.md`.

@@ -14,7 +14,7 @@ The v1 direction is documented in:
 ## Development
 
 ```bash
-python3 -m pip install -e '.[dev]'
+python3 -m pip install -e '.[dev]' -i https://mirrors.aliyun.com/pypi/simple --trusted-host mirrors.aliyun.com
 python3 -m pytest -q
 ```
 

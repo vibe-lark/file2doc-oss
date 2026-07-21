@@ -9,15 +9,25 @@ Use one of these base URLs:
 # Local development
 BASE_URL=http://127.0.0.1:8000
 
-# Example production deployment. Requires the deployed auth token.
-BASE_URL=https://file2doc.example.com
+# Production. Public gateway injects the internal auth token.
+BASE_URL=https://file2doc.solutionsuite.cn
 ```
 
-Do not put bearer tokens in docs, source files, or shared logs. Pass them through
-the environment when auth is enabled:
+Do not ask production users for `FILE2DOC_BEARER_TOKEN`. The production public
+gateway accepts user requests at `https://file2doc.solutionsuite.cn` and injects
+the internal bearer token when proxying to the private File2Doc service.
+
+Only use an auth header when calling an auth-enabled local service or a private
+cluster endpoint directly:
 
 ```bash
 AUTH_HEADER=(-H "Authorization: Bearer ${FILE2DOC_BEARER_TOKEN}")
+```
+
+For the production public gateway, leave `AUTH_HEADER` empty:
+
+```bash
+AUTH_HEADER=()
 ```
 
 ## Start Locally
@@ -101,9 +111,9 @@ curl -sS -X POST "$BASE_URL/parse-jobs/upload" \
 
 ## Upload Audio
 
-Audio uses the local ASR path. The service environment must have `ffmpeg`,
-`sherpa-onnx`, and `FILE2DOC_LOCAL_ASR_MODEL_DIR` pointing at a mounted model
-directory containing `model.int8.onnx` and `tokens.txt`.
+Audio uses the local FunASR path. The service environment must have `ffmpeg`,
+`funasr`, `FILE2DOC_LOCAL_ASR_ENGINE=funasr-local`, and
+`FILE2DOC_LOCAL_ASR_MODEL_DIR` pointing at a mounted FunASR model directory.
 
 ```bash
 curl -sS -X POST "$BASE_URL/parse-jobs/upload" \
@@ -114,7 +124,8 @@ curl -sS -X POST "$BASE_URL/parse-jobs/upload" \
 ```
 
 Audio manifests include `transcript` and transcript artifacts in the
-`artifacts` array.
+`artifacts` array. Production transcripts are expected to include sentence-level
+`segments` with `start_sec` and `end_sec`.
 
 ## Upload Video
 
@@ -135,6 +146,45 @@ curl -sS -X POST "$BASE_URL/parse-jobs/upload" \
 curl -sS "$BASE_URL/parse-jobs/job_abc123" "${AUTH_HEADER[@]}"
 ```
 
+Running jobs expose the current stage and queue state:
+
+```json
+{
+  "job_id": "job_abc123",
+  "status": "running",
+  "stage": "parser_started",
+  "percent": 30,
+  "latest_progress": {
+    "stage": "parser_started",
+    "percent": 30,
+    "message": "Parser started",
+    "detail": {},
+    "created_at": "2026-06-11T00:00:00Z"
+  },
+  "queue": {
+    "state": "running",
+    "position": null
+  },
+  "result": null,
+  "error": null
+}
+```
+
+Queued jobs expose their current queue position:
+
+```json
+{
+  "job_id": "job_waiting",
+  "status": "queued",
+  "stage": "queued",
+  "percent": 0,
+  "queue": {
+    "state": "queued",
+    "position": 1
+  }
+}
+```
+
 Completed jobs include result links:
 
 ```json
@@ -153,7 +203,29 @@ Completed jobs include result links:
 }
 ```
 
-Failed jobs include `error.code` and do not have a result package:
+Empty extraction results are successful jobs with an empty `content.md`. Check
+`manifest.parser.empty_result` to distinguish an empty source or silent media
+from a non-empty parse:
+
+```json
+{
+  "job_id": "job_abc123",
+  "status": "completed",
+  "stage": "completed",
+  "percent": 100,
+  "result": {
+    "manifest_url": "/parse-jobs/job_abc123/result",
+    "package_url": "/parse-jobs/job_abc123/package",
+    "content_artifact_id": "art_content",
+    "content_url": "/parse-jobs/job_abc123/artifacts/art_content"
+  },
+  "error": null
+}
+```
+
+Failed jobs are reserved for unsupported input, missing runtime configuration,
+parser/runtime exceptions, timeouts, and storage errors. Failed jobs include
+`error.code` and do not have a result package:
 
 ```json
 {
@@ -163,16 +235,37 @@ Failed jobs include `error.code` and do not have a result package:
   "percent": 100,
   "result": null,
   "error": {
-    "code": "empty_parse_result",
-    "message": "Parser returned no usable Markdown content."
+    "code": "parser_failed",
+    "message": "MarkItDown failed: ..."
   }
 }
 ```
 
-For `empty_parse_result`, do not retry the result or artifact endpoints for that
-job. Report the file as unparseable, ask for a different source when useful, or
-fall back to another user-approved workflow. `GET /parse-jobs/{job_id}/result`
-returns `409 result_not_ready` when no result package exists.
+For failed jobs, do not retry the result or artifact endpoints for that job.
+`GET /parse-jobs/{job_id}/result` returns `409 result_not_ready` when no result
+package exists.
+
+## Read Queue Metrics
+
+```bash
+curl -sS "$BASE_URL/metrics"
+```
+
+```json
+{
+  "jobs": {
+    "queued": 1,
+    "running": 2,
+    "completed": 42,
+    "completed_with_warnings": 0,
+    "failed": 3,
+    "expired": 10,
+    "total": 58,
+    "max_concurrent": 2,
+    "active_background_tasks": 3
+  }
+}
+```
 
 ## Read Progress Events
 

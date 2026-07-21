@@ -6,7 +6,7 @@ from fixtures import sample_file
 
 
 def test_completed_pdf_job_can_regenerate_first_page_image_at_higher_dpi(tmp_path):
-    sample = sample_file("sample-manual.pdf")
+    sample = sample_file("雅迪渠道系统操作手册.pdf")
     client = TestClient(create_app(storage_root=tmp_path, auth_enabled=False))
 
     created = client.post(
@@ -55,7 +55,7 @@ def test_completed_pdf_job_can_regenerate_first_page_image_at_higher_dpi(tmp_pat
 
 
 def test_regenerated_page_image_rejects_unsupported_dpi(tmp_path):
-    sample = sample_file("sample-manual.pdf")
+    sample = sample_file("雅迪渠道系统操作手册.pdf")
     client = TestClient(create_app(storage_root=tmp_path, auth_enabled=False))
 
     created = client.post(
@@ -74,7 +74,7 @@ def test_regenerated_page_image_rejects_unsupported_dpi(tmp_path):
 
 
 def test_regenerated_page_image_rejects_invalid_page(tmp_path):
-    sample = sample_file("sample-manual.pdf")
+    sample = sample_file("雅迪渠道系统操作手册.pdf")
     client = TestClient(create_app(storage_root=tmp_path, auth_enabled=False))
 
     created = client.post(

@@ -5,7 +5,7 @@ from fixtures import sample_file
 
 
 def test_successful_parse_manifest_exposes_parser_diagnostics(tmp_path):
-    sample = sample_file("sample-manual.pdf")
+    sample = sample_file("雅迪渠道系统操作手册.pdf")
     client = TestClient(create_app(storage_root=tmp_path, auth_enabled=False))
 
     created = client.post(

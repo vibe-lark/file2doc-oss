@@ -61,7 +61,7 @@ This plan turns the File2Doc v1 contract into a PDF tracer bullet.
 
 ## 4a. Audio and Video Parser
 
-- Reuse the local ASR approach from `attachment-to-doc-local` based on `sherpa-onnx` and the Paraformer Chinese model.
+- Use local FunASR with Paraformer, FSMN VAD, and punctuation models.
 - Use ffmpeg for audio extraction and candidate video frame extraction.
 - Implement change-aware frame extraction in the first version using lightweight image hashing or similar CPU-friendly frame-difference logic.
 - Keep audio/video transcription local; do not use MarkItDown built-in audio transcription.
