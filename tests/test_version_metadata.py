@@ -2,9 +2,9 @@ from file2doc.version import skill_version_payload, with_version_metadata
 
 
 def test_current_skill_version_needs_no_update() -> None:
-    payload = skill_version_payload("0.1.21")
+    payload = skill_version_payload("0.1.22")
 
-    assert payload["service_version"] == "0.1.21"
+    assert payload["service_version"] == "0.1.22"
     assert payload["skill"]["status"] == "current"
     assert payload["skill"]["update_available"] is False
     assert payload["skill"]["update_required"] is False
@@ -12,7 +12,7 @@ def test_current_skill_version_needs_no_update() -> None:
 
 
 def test_compatible_old_skill_gets_non_blocking_update_notice() -> None:
-    payload = skill_version_payload("0.1.20")
+    payload = skill_version_payload("0.1.21")
 
     assert payload["skill"]["status"] == "update_available"
     assert payload["skill"]["update_available"] is True
@@ -44,8 +44,8 @@ def test_missing_skill_version_exposes_migration_notice() -> None:
 def test_version_metadata_decorates_response_without_mutating_input() -> None:
     source = {"job_id": "job-1", "status": "queued"}
 
-    decorated = with_version_metadata(source, "0.1.20")
+    decorated = with_version_metadata(source, "0.1.21")
 
     assert source == {"job_id": "job-1", "status": "queued"}
     assert decorated["job_id"] == "job-1"
-    assert decorated["skill"]["latest_version"] == "0.1.21"
+    assert decorated["skill"]["latest_version"] == "0.1.22"

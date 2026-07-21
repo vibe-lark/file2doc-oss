@@ -1,7 +1,8 @@
 ---
 name: file2doc-http
 description: Parse offline files with the File2Doc HTTP API and retrieve Markdown, manifest, media artifacts, transcripts, and video frames. Use when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
-version: 0.1.21
+metadata:
+  version: "0.1.22"
 ---
 
 # File2Doc HTTP
@@ -13,7 +14,7 @@ the local file bytes.
 
 ```bash
 BASE_URL=${BASE_URL:-https://file2doc.solutionsuite.cn}
-SKILL_VERSION=0.1.21
+SKILL_VERSION=0.1.22
 
 curl -fsS "$BASE_URL/skills/file2doc-http/version.json?installed_version=$SKILL_VERSION"
 
@@ -36,7 +37,7 @@ started with auth enabled.
    `update_required` is true, show the supplied update command and stop. If only
    `update_available` is true, mention it without blocking the task.
 2. Upload with `POST /parse-jobs/upload` and send
-   `X-File2Doc-Skill-Version: 0.1.21` on upload, status, and result requests.
+   `X-File2Doc-Skill-Version: 0.1.22` on upload, status, and result requests.
 3. Poll `GET /parse-jobs/{job_id}` until `completed`,
    `completed_with_warnings`, or `failed`.
 4. If failed, read `error.code` and stop result retrieval because no package
@@ -48,6 +49,23 @@ started with auth enabled.
 8. For media, choose items from `media_index` and download each item's
    `artifact_id` through the same artifact endpoint.
 9. Use `GET /parse-jobs/{job_id}/package` only for full zip export or debugging.
+
+## Source Attribution
+
+Every final document created from File2Doc output must include a concise
+`Sources` or `来源` section that lets the user trace every input.
+
+- For a URL input, include the clickable original URL, not a downloaded copy's
+  temporary path.
+- For a file or attachment, preserve the original filename and attach the original file
+  to the final document, or include a user-accessible link to
+  its source message, Drive item, or other durable location.
+- List every input separately when the result combines multiple sources.
+- A local path is not a traceable source. File2Doc artifact URLs, job URLs, and
+  generated Markdown are derived outputs and must not replace the original
+  source reference.
+- If the Agent cannot attach the file or produce a user-accessible source link,
+  ask the user for a durable source location before finalizing the document.
 
 ## Contract
 
