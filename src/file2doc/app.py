@@ -12,6 +12,7 @@ from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 
 from file2doc.audio import AudioParseOptions
+from file2doc.parsers import ParseOptions
 from file2doc.rendering import AGENT_PAGE_IMAGE_DPI, ALLOWED_PAGE_IMAGE_DPI
 from file2doc.store import JobStore
 from file2doc.version import SERVICE_VERSION, skill_version_payload, with_version_metadata
@@ -23,12 +24,15 @@ def create_app(
     auth_enabled: bool = True,
     bearer_token: str | None = None,
     audio_parse_options: AudioParseOptions | None = None,
+    parse_options: ParseOptions | None = None,
     video_frame_extractor=None,
 ) -> FastAPI:
     root = Path(storage_root)
+    capability_parse_options = parse_options or ParseOptions.from_env()
     store = JobStore(
         root,
         audio_parse_options=audio_parse_options,
+        parse_options=capability_parse_options,
         video_frame_extractor=video_frame_extractor,
     )
     app = FastAPI(
@@ -106,6 +110,9 @@ def create_app(
                     asr_engine,
                 ),
                 "ffmpeg_available": _ffmpeg_available(),
+                "visual_parsing_configured": (
+                    capability_parse_options.visual_configured
+                ),
                 "checks": checks,
             },
         )
@@ -125,7 +132,25 @@ def create_app(
             "transcript_segments_supported": True,
             "transcript_timestamps_supported": asr_engine == "funasr-local",
             "ffmpeg_available": _ffmpeg_available(),
-            "remote_ocr_configured": _remote_ocr_configured(),
+            "visual_parsing_configured": capability_parse_options.visual_configured,
+            "visual_provider": "ark-responses",
+            "visual_model": capability_parse_options.visual_model,
+            "visual_result_schema_version": "file2doc.visual-result.v1",
+            "visual_tool_actions": {
+                "zoom": True,
+                "rotate": True,
+                "point": False,
+                "grounding": False,
+            },
+            "visual_item_timeout_seconds": (
+                capability_parse_options.visual_item_timeout_seconds
+            ),
+            "visual_job_deadline_seconds": (
+                capability_parse_options.visual_job_deadline_seconds
+            ),
+            "visual_max_concurrency": (
+                capability_parse_options.visual_max_concurrency
+            ),
             "page_image_dpi_options": sorted(ALLOWED_PAGE_IMAGE_DPI),
             "page_image_dpi_default": AGENT_PAGE_IMAGE_DPI,
         }
@@ -327,16 +352,6 @@ def _ffmpeg_available() -> bool:
         return bool(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception:
         return False
-
-
-def _remote_ocr_configured() -> bool:
-    return bool(
-        os.environ.get("FILE2DOC_OCR_MODEL")
-        and (
-            os.environ.get("FILE2DOC_OCR_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-        )
-    )
 
 
 def _configured_max_upload_size_mb() -> int | None:

@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from file2doc.audio import AudioParseFailure, AudioParseOptions, parse_audio_transcript
-from file2doc.parsers import ParseFailure, parse_content_markdown
+from file2doc.parsers import ParseFailure, ParseOptions, parse_content_markdown
 from file2doc.rendering import (
     AGENT_PAGE_IMAGE_DPI,
     AGENT_THUMBNAIL_MAX_EDGE,
@@ -25,6 +25,10 @@ from file2doc.rendering import (
 )
 from file2doc.video import VideoFrameExtractionError, VideoToolUnavailable, extract_video_frames
 from file2doc.version import skill_version_payload
+from file2doc_markitdown_visual.plugin import (
+    VISUAL_PROMPT_VERSION,
+    VISUAL_RESULT_SCHEMA_VERSION,
+)
 
 SCHEMA_VERSION = "file2doc.parse-result.v1"
 VideoFrameExtractor = Callable[..., dict]
@@ -36,10 +40,12 @@ class JobStore:
         storage_root: Path,
         *,
         audio_parse_options: AudioParseOptions | None = None,
+        parse_options: ParseOptions | None = None,
         video_frame_extractor: VideoFrameExtractor | None = None,
     ) -> None:
         self.storage_root = storage_root
         self.audio_parse_options = audio_parse_options
+        self.parse_options = parse_options
         self.video_frame_extractor = video_frame_extractor or extract_video_frames
         self.jobs_root = storage_root / "jobs"
         self.jobs_root.mkdir(parents=True, exist_ok=True)
@@ -119,7 +125,11 @@ class JobStore:
         self.mark_job_running(job_id, "parser_started", 30, "Parser started")
         job = self.read_job(job_id)
         try:
-            parsed = parse_content_markdown(source_path, content_type)
+            parsed = parse_content_markdown(
+                source_path,
+                content_type,
+                self.parse_options,
+            )
         except ParseFailure as error:
             self._fail_job(job, error.code, str(error))
             return
@@ -143,8 +153,20 @@ class JobStore:
                 source_path,
                 result_root,
                 new_artifact_id=lambda: _id("art"),
+                visual_results=parsed.visual_results,
+                visual_configured=bool(
+                    self.parse_options and self.parse_options.visual_configured
+                ),
             )
             artifacts.update(visual_artifacts)
+
+        visual_media, visual_result_artifacts = self._write_visual_results(
+            parsed,
+            result_root=result_root,
+            job_expires_at=job["expires_at"],
+        )
+        media_index.extend(visual_media)
+        artifacts.update(visual_result_artifacts)
 
         self.mark_job_running(job_id, "assembling", 80, "Assembling result package")
         job = self.read_job(job_id)
@@ -166,18 +188,20 @@ class JobStore:
             "page_index": page_index,
             "media_index": media_index,
             "artifacts": list(artifacts.values()),
-            "warnings": [],
+            "warnings": parsed.warnings,
             "created_at": _iso(_now()),
             "expires_at": job["expires_at"],
         }
         self._write_json(result_root / "manifest.json", manifest)
         self._write_json(result_root / "artifacts.json", artifacts)
 
-        job["status"] = "completed"
-        job["stage"] = "completed"
+        final_status = "completed_with_warnings" if parsed.warnings else "completed"
+        job["status"] = final_status
+        job["stage"] = final_status
         job["percent"] = 100
+        job["warnings_count"] = len(parsed.warnings)
         job["latest_progress"] = {
-            "stage": "completed",
+            "stage": final_status,
             "percent": 100,
             "message": "Result package assembled",
             "detail": {},
@@ -191,7 +215,110 @@ class JobStore:
         }
         self._persist_job(job)
         self._write_json(job_root / "job.json", job)
-        self._append_event(job_id, "completed", 100, "Result package assembled")
+        self._append_event(job_id, final_status, 100, "Result package assembled")
+
+    def _write_visual_results(
+        self,
+        parsed,
+        *,
+        result_root: Path,
+        job_expires_at: str,
+    ) -> tuple[list[dict], dict[str, dict]]:
+        media_index: list[dict] = []
+        artifacts: dict[str, dict] = {}
+        results_by_ref = {result.source_ref: result for result in parsed.visual_results}
+
+        for source in parsed.visual_sources:
+            extension = ".jpg" if source.media_type in {"image/jpeg", "image/jpg"} else ".png"
+            image_path = Path(f"images/visual/{source.content_sha256}{extension}")
+            absolute_image_path = result_root / image_path
+            absolute_image_path.parent.mkdir(parents=True, exist_ok=True)
+            absolute_image_path.write_bytes(source.content)
+            image_artifact_id = _id("art")
+            image_artifact = {
+                "artifact_id": image_artifact_id,
+                "kind": "visual_source_image",
+                "path": image_path.as_posix(),
+                "media_type": source.media_type,
+                "sha256": source.content_sha256,
+            }
+            artifacts[image_artifact_id] = image_artifact
+
+            result = results_by_ref.get(source.source_ref)
+            result_artifact_id = None
+            result_path = None
+            if result is not None:
+                result_artifact_id = _id("art")
+                result_path = Path(f"visual/{source.content_sha256}.json")
+                payload = _visual_result_payload(result)
+                self._write_json(result_root / result_path, payload)
+                artifacts[result_artifact_id] = {
+                    "artifact_id": result_artifact_id,
+                    "kind": "visual_parse_result",
+                    "path": result_path.as_posix(),
+                    "media_type": "application/json; charset=utf-8",
+                    "source_ref": source.source_ref,
+                    "sha256": source.content_sha256,
+                }
+
+            locations = source.locations or ("unknown document position",)
+            for occurrence, location in enumerate(locations, 1):
+                base_media_id = f"visual-item-{source.content_sha256[:16]}"
+                media_id = (
+                    base_media_id
+                    if occurrence == 1
+                    else f"{base_media_id}-{occurrence:03d}"
+                )
+                media_index.append(
+                    {
+                        "id": media_id,
+                        "kind": "embedded_image",
+                        "path": image_path.as_posix(),
+                        "artifact_id": image_artifact_id,
+                        "media_type": source.media_type,
+                        "source_ref": {
+                            "type": "document_position",
+                            "location": location,
+                        },
+                        "visual_parse_status": (
+                            "completed" if result is not None else "warning"
+                        ),
+                        "visual_result_artifact_id": result_artifact_id,
+                        "visual_result_path": (
+                            result_path.as_posix() if result_path is not None else None
+                        ),
+                        "derived": False,
+                    }
+                )
+
+        diagnostic_expires_at = min(
+            _now() + timedelta(hours=1),
+            _parse_iso(job_expires_at),
+        )
+        for index, diagnostic in enumerate(parsed.visual_artifacts, 1):
+            extension = ".png" if diagnostic.media_type == "image/png" else ".jpg"
+            path = Path(f"diagnostics/image-process/{index:04d}{extension}")
+            absolute_path = result_root / path
+            absolute_path.parent.mkdir(parents=True, exist_ok=True)
+            absolute_path.write_bytes(diagnostic.content)
+            artifact_id = _id("art")
+            artifacts[artifact_id] = {
+                "artifact_id": artifact_id,
+                "kind": diagnostic.kind,
+                "path": path.as_posix(),
+                "media_type": diagnostic.media_type,
+                "source_ref": diagnostic.source_ref,
+                "diagnostic_ref": diagnostic.diagnostic_ref,
+                "image_process": {
+                    "action": diagnostic.action_type,
+                    "arguments": dict(diagnostic.arguments),
+                    "status": diagnostic.status,
+                    "warnings": list(diagnostic.warnings),
+                },
+                "diagnostic_only": True,
+                "expires_at": _iso(diagnostic_expires_at),
+            }
+        return media_index, artifacts
 
     def _complete_audio_job(self, job: dict, source_path: Path, result_root: Path) -> None:
         self.mark_job_running(job["job_id"], "asr_running", 30, "ASR transcription running")
@@ -473,6 +600,10 @@ class JobStore:
             artifact = artifacts[artifact_id]
         except KeyError as error:
             raise HTTPException(status_code=404, detail={"code": "artifact_not_found"}) from error
+        if artifact.get("expires_at") and _parse_iso(artifact["expires_at"]) <= _now():
+            absolute_path = self._job_root(job_id) / "result-package" / artifact["path"]
+            absolute_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=410, detail={"code": "artifact_expired"})
         absolute_path = self._job_root(job_id) / "result-package" / artifact["path"]
         return artifact | {"absolute_path": absolute_path}
 
@@ -788,6 +919,33 @@ class JobStore:
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(12)}"
+
+
+def _visual_result_payload(result) -> dict:
+    return {
+        "schema_version": VISUAL_RESULT_SCHEMA_VERSION,
+        "prompt_version": VISUAL_PROMPT_VERSION,
+        "source_ref": result.source_ref,
+        "content_sha256": result.content_sha256,
+        "locations": list(result.locations),
+        "description": result.description,
+        "visible_text": list(result.visible_text),
+        "layout": result.layout,
+        "warnings": list(result.warnings),
+        "remote_services_used": True,
+        "provider": result.provider,
+        "model": result.model,
+        "tool_actions": [
+            {
+                "type": audit.action_type,
+                "arguments": dict(audit.arguments),
+                "status": audit.status,
+                "diagnostic_ref": audit.diagnostic_ref,
+                "warnings": list(audit.warnings),
+            }
+            for audit in result.image_process_audits
+        ],
+    }
 
 
 def _now() -> datetime:

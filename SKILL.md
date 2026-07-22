@@ -2,7 +2,7 @@
 name: file2doc-http
 description: Parse offline files with the File2Doc HTTP API and retrieve Markdown, manifest, media artifacts, transcripts, and video frames. Use when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
 metadata:
-  version: "0.1.23"
+  version: "0.1.25"
 ---
 
 # File2Doc HTTP
@@ -14,7 +14,7 @@ the local file bytes.
 
 ```bash
 BASE_URL=${BASE_URL:-https://file2doc.solutionsuite.cn}
-SKILL_VERSION=0.1.23
+SKILL_VERSION=0.1.25
 
 curl -fsS "$BASE_URL/skills/file2doc-http/version.json?installed_version=$SKILL_VERSION"
 
@@ -37,7 +37,7 @@ started with auth enabled.
    `update_required` is true, show the supplied update command and stop. If only
    `update_available` is true, mention it without blocking the task.
 2. Upload with `POST /parse-jobs/upload` and send
-   `X-File2Doc-Skill-Version: 0.1.23` on upload, status, and result requests.
+   `X-File2Doc-Skill-Version: 0.1.25` on upload, status, and result requests.
 3. Poll `GET /parse-jobs/{job_id}` until `completed`,
    `completed_with_warnings`, or `failed`.
 4. If failed, read `error.code` and stop result retrieval because no package
@@ -48,7 +48,10 @@ started with auth enabled.
    `GET /parse-jobs/{job_id}/artifacts/{artifact_id}`.
 8. For media, choose items from `media_index` and download each item's
    `artifact_id` through the same artifact endpoint.
-9. Use `GET /parse-jobs/{job_id}/package` only for full zip export or debugging.
+9. For an embedded image or scanned page, read its structured semantic result
+   from `visual_result_artifact_id` when present. Treat a missing value plus
+   `visual_parse_status: warning` as a partial result, not a missing file path.
+10. Use `GET /parse-jobs/{job_id}/package` only for full zip export or debugging.
 
 ## Final Document
 
@@ -126,9 +129,12 @@ Trust the manifest over guessed paths.
 - `content` points to the primary Markdown artifact.
 - `artifacts` is an array, not a map.
 - `media_index` lists page images, thumbnails, embedded images, and video frames.
+- Visual media keep the original bytes in `artifact_id` and link the structured
+  `description`, `visible_text`, `layout`, and `warnings` JSON through
+  `visual_result_artifact_id`.
 - `timeline` contains video frame time anchors.
 - `transcript.segments` is the structured ASR output for audio and video.
-- Empty parser, OCR, or ASR output is a completed result with empty artifacts
+- Empty parser, Visual Parsing, or ASR output is a completed result with empty artifacts
   and `parser.empty_result: true`, not a failed job.
 - In production, ASR uses local FunASR and should emit sentence-level
   `start_sec`, `end_sec`, and `text`.
@@ -137,8 +143,11 @@ Trust the manifest over guessed paths.
 
 ## Modality Notes
 
-- PDF: use Markdown plus page images or thumbnails when available.
-- Office: use Markdown; visual assets depend on parser support.
+- PDF: use Markdown plus page images or thumbnails when available. Embedded
+  images and scanned page renders include VLM-produced semantic results.
+- Office: use Markdown plus embedded image media and linked Visual Parse Result
+  artifacts. Visual results contain description, visible text, layout, and
+  uncertainty warnings.
 - Audio: use Markdown plus `transcript` artifacts.
 - Video: use transcript, `timeline`, and selected `video_frame` artifacts.
   Frame extraction scans time coverage and scene changes, filters low-information

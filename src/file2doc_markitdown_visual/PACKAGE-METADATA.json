@@ -1,0 +1,28 @@
+{
+  "name": "file2doc-markitdown-visual",
+  "version": "0.3.1",
+  "distributionMode": "embedded-package-in-file2doc-wheel",
+  "pluginEntryPoint": "file2doc-markitdown-visual = file2doc_markitdown_visual",
+  "markitdownCoreVersion": "0.1.2",
+  "runtimeComponents": {
+    "pdfplumber": "0.11.x",
+    "pypdfium2": ">=4.30",
+    "Pillow": ">=10",
+    "mammoth": ">=1.9",
+    "pandas": ">=2",
+    "python-docx": "markitdown[docx]==0.1.2",
+    "python-pptx": "markitdown[pptx]==0.1.2",
+    "openpyxl": "markitdown[xlsx]==0.1.2"
+  },
+  "upstreamDerivativeSource": {
+    "repository": "https://github.com/microsoft/markitdown",
+    "commit": "e144e0a2be95b34df17433bac904e635f2c5e551",
+    "paths": [
+      "packages/markitdown-ocr",
+      "packages/markitdown/src/markitdown/converters/_image_converter.py"
+    ],
+    "reviewedAt": "2026-07-16",
+    "license": "MIT"
+  },
+  "runtimeDependsOnOfficialMarkitdownOcr": false
+}

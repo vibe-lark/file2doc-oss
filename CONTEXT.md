@@ -61,7 +61,7 @@ The period for which source files and result packages remain available before th
 _Avoid_: Expiration, cleanup
 
 **Parser Profile**:
-A named parsing configuration that determines how much structure, media, OCR, transcript, and visual detail a parse result should include.
+A named parsing configuration that determines how much structure, media, transcript, and visual detail a parse result should include.
 _Avoid_: Preset, mode
 
 **Page Image**:
@@ -73,12 +73,34 @@ A low-resolution page or frame preview that helps agents quickly understand visu
 _Avoid_: Preview image, small screenshot
 
 **OCR Layer**:
-Text and layout information attached to a page image, used when agents need source-page text without inspecting the full image.
-_Avoid_: OCR result, extracted text
+A legacy page-level compatibility artifact that exposes visible text and layout
+from Visual Parsing to older manifest consumers. It is not produced by a
+separate OCR engine; new consumers should use the linked Visual Parse Result.
+_Avoid_: OCR engine output, OCR fallback
 
-**OCR Fallback**:
-An OCR layer produced by a separate OCR engine when the primary parser cannot provide reliable page text.
-_Avoid_: Extra OCR, backup text extraction
+**Visual Parsing**:
+Pixel-level interpretation performed by the configured vision-language model for an individual page render or embedded image. It turns a visual asset that would otherwise require downstream Agent inspection into semantic, agent-readable content. File2Doc does not maintain a separate traditional OCR engine; all pixel-level text recognition is part of Visual Parsing. The document converter inserts the result at the Visual Item's source position, but surrounding page or document context is not part of the VLM request.
+_Avoid_: Traditional OCR, image-to-text fallback, VLM OCR
+
+**Visual Item**:
+A page render or embedded image selected from a PDF or Office source for Visual Parsing. A Visual Item remains linked to its source page, slide, sheet, or document position.
+_Avoid_: OCR input, screenshot, loose image
+
+**Visual Parse Result**:
+The semantic, agent-readable output produced for one Visual Item. It contains a generic description, visible text in source order, layout information, and uncertainty warnings. Domain-specific fields such as numeric candidates are not part of this generic result.
+_Avoid_: OCR text, image caption, business extraction result
+
+**Vision-Language Model**:
+The configured remote model that owns all Visual Parsing in File2Doc, including visible-text recognition, image description, layout interpretation, and uncertainty reporting.
+_Avoid_: OCR engine, image parser
+
+**Visual Provider**:
+The runtime adapter through which File2Doc invokes a Vision-Language Model. The first production Visual Provider uses the Volcengine Ark Responses API while the File2Doc parsing boundary remains provider-independent.
+_Avoid_: OCR endpoint, model URL
+
+**Visual Tool Action**:
+A provider-side operation such as zooming or rotating a Visual Item to resolve small, ambiguous, or incorrectly oriented content. Its type, safe arguments, status, and short-lived diagnostic image remain traceable from the Visual Parse Result.
+_Avoid_: Image edit, preprocessing step
 
 **Content Markdown**:
 The clean, agent-readable Markdown body of a parse result, optimized for understanding and rearrangement rather than source-page fidelity.
@@ -117,7 +139,7 @@ A stable, high-level phase in a parse job lifecycle that lets agents and humans 
 _Avoid_: Parser step, internal state
 
 **Warning**:
-A non-fatal parsing problem that downstream agents should consider when using a partial parse result.
+A non-fatal parsing problem, including a Visual Item that could not be interpreted, that downstream agents should consider when using a partial parse result. A warning does not prevent File2Doc from packaging other usable or explicitly empty outputs.
 _Avoid_: Soft error, log warning
 
 **Resource Limit**:

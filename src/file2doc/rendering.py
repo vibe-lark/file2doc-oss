@@ -26,6 +26,8 @@ def render_pdf_visual_assets(
     new_artifact_id: Callable[[], str],
     page_image_dpi: int = AGENT_PAGE_IMAGE_DPI,
     thumbnail_max_edge: int = AGENT_THUMBNAIL_MAX_EDGE,
+    visual_results=(),
+    visual_configured: bool = False,
 ) -> tuple[list[dict], list[dict], dict[str, dict]]:
     document = pdfium.PdfDocument(source_path)
     page_count = len(document)
@@ -52,7 +54,15 @@ def render_pdf_visual_assets(
         thumbnail = thumbnail.convert("RGB")
     thumbnail.save(result_root / thumbnail_path, format="JPEG")
     (result_root / ocr_path).write_text(
-        json.dumps(_not_configured_ocr_sidecar(page_number), ensure_ascii=False, indent=2),
+        json.dumps(
+            _visual_text_sidecar(
+                page_number,
+                visual_results,
+                visual_configured=visual_configured,
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ),
         encoding="utf-8",
     )
 
@@ -119,14 +129,54 @@ def render_pdf_visual_assets(
     return page_index, media_index, artifacts
 
 
-def _not_configured_ocr_sidecar(page_number: int) -> dict:
+def _visual_text_sidecar(
+    page_number: int,
+    visual_results,
+    *,
+    visual_configured: bool,
+) -> dict:
+    page_prefix = f"page {page_number}"
+    matching = [
+        result
+        for result in visual_results
+        if any(location.lower().startswith(page_prefix) for location in result.locations)
+    ]
+    if matching:
+        return {
+            "page": page_number,
+            "status": "completed",
+            "engine": "vlm-visual-parsing",
+            "text": "\n".join(
+                text for result in matching for text in result.visible_text
+            ),
+            "blocks": [
+                {
+                    "source_ref": result.source_ref,
+                    "locations": list(result.locations),
+                    "description": result.description,
+                    "visible_text": list(result.visible_text),
+                    "layout": result.layout,
+                    "warnings": list(result.warnings),
+                }
+                for result in matching
+            ],
+            "warnings": list(
+                dict.fromkeys(
+                    warning for result in matching for warning in result.warnings
+                )
+            ),
+        }
     return {
         "page": page_number,
-        "status": "not_configured",
-        "engine": None,
+        "status": "not_used" if visual_configured else "not_configured",
+        "engine": "vlm-visual-parsing" if visual_configured else None,
         "text": "",
         "blocks": [],
-        "warnings": ["OCR is not configured for this deployment."],
+        "warnings": (
+            []
+            if visual_configured
+            else ["Visual Parsing is not configured for this deployment."]
+        ),
     }
 
 

@@ -29,27 +29,93 @@ uploaded PDF
 -> parse job
 -> progress events
 -> MarkItDown Markdown extraction
--> markitdown-ocr with explicitly configured OpenAI-compatible OCR when needed
+-> VLM-owned Visual Parsing for embedded images and scanned pages
 -> thumbnails and page images
--> OCR layer when available
+-> legacy page text sidecar when required for compatibility
 -> manifest.json and content.md
 -> result package retrieval
 ```
 
 This slice should prioritize the job model, result package structure, manifest v1, progress events, and a usable PDF path before broadening Office, video, audio, Excel, derived assets, or full cache reuse.
 
-The first slice uses MarkItDown as the primary document parser. `markitdown-ocr` may call the configured OpenAI-compatible OCR endpoint for image-heavy pages or embedded images. Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription must remain disabled.
+The first slice uses MarkItDown as the primary document parser. File2Doc's
+independently maintained visual plugin calls the configured Ark Responses
+provider for embedded images and scanned PDF pages. Azure Document Intelligence,
+Azure Content Understanding, URL fetching, YouTube transcript fetching, and
+MarkItDown built-in audio transcription remain disabled.
 
-If MarkItDown returns usable Markdown but OCR or media extraction fails for some regions, the job may complete with warnings. If a document produces no usable Markdown and OCR is unavailable or fails, the job should fail visibly.
+If a Visual Item or media extraction fails, the job may complete with warnings.
+An empty parser or Visual Parsing result still produces an explicit empty result
+package rather than a failed job.
 
 The first slice must support file uploads. Service-local paths may be implemented as an optional deployment-local entry point, but skills and ordinary agents should use file upload by default. Any service-local path is resolved on the File2Doc service host, not on the caller's machine.
+
+## Visual Parsing Direction
+
+File2Doc uses a configured Vision-Language Model for all pixel-level
+interpretation and does not maintain a separate traditional OCR engine.
+MarkItDown continues to extract native document structure. Its visual-enhanced
+converters extract individual embedded images and scanned PDF page renders as
+Visual Items, invoke the Visual Provider for each item independently, and
+insert semantic results at the items' source positions.
+
+Each Visual Parse Result contains a generic description, visible text in source
+order, layout information, and uncertainty warnings. It does not contain
+domain-specific fields such as numeric candidates. The first production Visual
+Provider uses the Volcengine Ark Responses API behind an internal adapter, with
+Zoom and Rotate tool actions available for ambiguous or incorrectly oriented
+content.
+
+An individual Visual Item failure is non-fatal. File2Doc preserves the original
+media, emits a warning, and packages all other usable or explicitly empty
+outputs. Empty Visual Parsing output does not become a top-level job failure.
+
+The first Visual Parsing release covers embedded images in PDF, DOCX, PPTX, and
+XLSX sources plus scanned PDF page renders. It does not add standalone image
+sources or apply Visual Parsing to extracted video frames.
+
+Each Visual Item remains available as an original Media Item. Its structured
+Visual Parse Result is stored as a separate JSON artifact and linked from the
+Media Index. Content Markdown inserts a concise semantic block at the Visual
+Item's source position so downstream agents can understand the image without
+opening it. Provider identity, model, latency, Visual Tool Actions, and
+tool-produced images belong to manifest diagnostics rather than normal Content
+Markdown.
+
+The initial implementation is imported from the independently evolved
+`file2doc-markitdown-visual` v0.3.1 code used by rd-assistant, which itself is
+derived from Microsoft's MIT-licensed `markitdown-ocr` converters. File2Doc
+retains the upstream notices and source commit references, but owns a separate
+copy after import. It does not depend on the rd-assistant repository, image,
+secrets, package registry, deployment, or release lifecycle.
+
+Within one Parse Job, byte-identical Visual Items share one provider call using
+their content hash. Every occurrence still keeps its own Media Reference and
+inline semantic block. The first release does not cache Visual Parse Results
+across jobs or sources. Diagnostics record the content hash, provider, model,
+schema version, and prompt version so a future cache can define correct
+invalidation rules.
+
+When the deployment provides valid `FILE2DOC_VISUAL_*` configuration, Visual
+Parsing runs automatically for every supported Visual Item. Upload callers do
+not select or understand a separate OCR option, and the existing `agent` parser
+profile remains the default. Provider absence or temporary failure degrades to
+warnings and empty visual results. The capabilities endpoint reports whether
+Visual Parsing is configured and identifies its available provider features.
+
+Visual Parsing may send an extracted embedded image or one scanned PDF page
+render to File2Doc's dedicated Ark endpoint. It does not send the complete
+Office or PDF source as one request and does not call an unconfigured remote
+provider. Each result records `remote_services_used`, provider, model, and its
+source Media Reference. Logs exclude image payloads, credentials, and complete
+provider responses; tool-produced diagnostic images use short retention.
 
 ## Implementation Roadmap
 
 After the PDF tracer bullet, modality support should be added in this order:
 
 1. Office documents, with PPT/PPTX and Word/DOC/DOCX prioritized after PDF. Excel/XLSX/XLS/CSV remains lower priority.
-2. Video and audio, by adding change-aware frame extraction and local FunASR transcripts.
+2. Video and audio, by adding dynamic change-aware frame extraction and local FunASR transcripts with sentence-level timestamps.
 3. Excel and CSV, by adding table summaries and table artifacts.
 
 For Office documents, the manifest source remains the original Office file. The converted PDF is a parser artifact, not the source.
@@ -141,6 +207,10 @@ Polling responses return current job state, the latest progress event, warning/e
     "created_at": "..."
   },
   "warnings_count": 0,
+  "queue": {
+    "state": "running",
+    "position": null
+  },
   "error": null,
   "result": {
     "manifest_url": "/parse-jobs/job_.../result",
@@ -165,6 +235,28 @@ GET /parse-jobs/{job_id}/events?after=evt_...
 }
 ```
 
+Service-level job counters are available through:
+
+```http
+GET /metrics
+```
+
+```json
+{
+  "jobs": {
+    "queued": 1,
+    "running": 2,
+    "completed": 42,
+    "completed_with_warnings": 0,
+    "failed": 3,
+    "expired": 10,
+    "total": 58,
+    "max_concurrent": 2,
+    "active_background_tasks": 3
+  }
+}
+```
+
 `GET /parse-jobs/{job_id}/result` returns the latest manifest JSON directly when the result is ready. If the result is not ready, return `409 result_not_ready`; if the result has expired, return `410 result_expired`.
 
 Final outputs are retrieved through the result package:
@@ -175,6 +267,10 @@ Final outputs are retrieved through the result package:
 4. Download individual artifacts through `GET /parse-jobs/{job_id}/artifacts/{artifact_id}`.
 5. For targeted media retrieval, choose items from `media_index` and download
    their `artifact_id` values through the same artifact endpoint.
+6. For a Visual Item, download `visual_result_artifact_id` when present to read
+   its structured `description`, `visible_text`, `layout`, and `warnings`.
+   `visual_parse_status: warning` with no result artifact is a partial parse,
+   while `artifact_id` still identifies the retained original image.
 
 `GET /parse-jobs/{job_id}/package` may return the complete result package as a zip archive for callers that need to export or inspect all artifacts at once. Agents should prefer the manifest plus targeted artifact downloads.
 
@@ -283,7 +379,7 @@ Parser-native outputs may be retained under `parser_artifacts/` for debugging an
   },
   "parser_profile": "agent",
   "parser_versions": {
-    "file2doc": "0.1.21",
+    "file2doc": "0.1.0",
     "markitdown": "unknown",
     "markitdown_ocr": "unknown",
     "asr": "unknown"
@@ -338,7 +434,7 @@ Rules:
 - Preserve the source document reading order.
 - Do not summarize, rewrite, or semantically reorganize source content.
 - Only emit a top-level title when the source parser provides an explicit document title.
-- OCR text produced by markitdown-ocr may appear in `content.md` where the OCR plugin inserts it, but OCR provenance should still be recorded in the manifest.
+- Visual Parse Results appear in `content.md` at their source positions and remain linked to structured JSON artifacts and original media through the manifest.
 - Refer to media by stable media references, not file paths.
 - Use invisible HTML comments containing YAML for lightweight block metadata when useful.
 - Add block metadata only at coarse boundaries such as source pages, slides, frames, or artifacts when File2Doc can determine them without parser-specific layout data.
@@ -412,7 +508,10 @@ If MarkItDown cannot produce text for a page but rendering succeeds, use `parse_
 
 ## OCR Layer
 
-OCR layers are page-level assets when OCR is performed. In v1, document OCR is provided by `markitdown-ocr` through the explicitly configured OpenAI-compatible endpoint, so OCR layers should record `remote=true`, model endpoint id, and parser provenance.
+Legacy OCR layers remain page-level compatibility assets. Pixel-level
+interpretation is provided by Visual Parsing, whose structured result records
+`remote_services_used=true`, provider, model, source media, and parser
+provenance.
 
 OCR layers should include text when available. Detailed layout blocks are optional and should not be fabricated when the parser does not provide them.
 
@@ -642,7 +741,6 @@ Warning severities:
 First-version error codes:
 
 - `unsupported_source_kind`
-- `empty_parse_result`
 - `source_not_found`
 - `source_too_large`
 - `source_unreadable`
@@ -650,7 +748,7 @@ First-version error codes:
 - `resource_limit_exceeded`
 - `parser_unavailable`
 - `parser_parse_failed`
-- `remote_ocr_failed`
+- `visual_item_failed`
 - `asr_failed`
 - `rendering_failed`
 - `thumbnail_generation_failed`
@@ -662,12 +760,20 @@ First-version error codes:
 
 Top-level job errors should include `code`, `message`, and `stage`. Messages are for humans and agents; raw stderr or stack traces should be stored as diagnostics rather than returned as primary messages.
 
+Empty parser, Visual Parsing, and ASR output is not a top-level job error. The service
+should still assemble a result package with empty content artifacts and set
+`parser.empty_result: true` so callers can decide whether to show an empty
+document, ask the user for another source, or run a separate workflow.
+
 ## Diagnostics
 
 Parser stderr, stack traces, and tool logs may be stored under `diagnostics/` for explicit debugging. Normal job responses should return clean errors and warnings instead of raw logs. Diagnostics should be marked debug-only in the manifest and should avoid exposing sensitive environment values.
 
 ## Remote and Local Processing
 
-File2Doc v1 minimizes local dependencies by using MarkItDown for local document conversion and an explicitly configured OpenAI-compatible endpoint for OCR. OCR requests may send extracted document images or rendered pages to the configured remote endpoint.
+File2Doc v1 uses MarkItDown for local native document conversion and an
+explicitly configured File2Doc Ark Responses provider for Visual Parsing. A
+provider request contains one extracted embedded image or scanned page render,
+never the complete Office or PDF source.
 
-Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription are disabled in v1. Audio and video transcription use the local FunASR path.
+Azure Document Intelligence, Azure Content Understanding, URL fetching, YouTube transcript fetching, and MarkItDown built-in audio transcription are disabled in v1. Audio and video transcription uses the local FunASR path and should emit timestamped transcript segments when ASR succeeds.

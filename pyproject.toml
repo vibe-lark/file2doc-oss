@@ -1,15 +1,17 @@
 [project]
 name = "file2doc"
-version = "0.1.23"
+version = "0.1.25"
 description = "HTTP-first offline file parsing service for agent-friendly result packages."
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.111",
   "imageio-ffmpeg>=0.5",
+  "mammoth>=1.9",
   "markitdown[pdf,pptx,docx,xlsx]>=0.1.2",
-  "markitdown-ocr>=0.1.0",
   "openai>=1.0",
+  "pandas>=2",
   "pillow>=10",
+  "pdfplumber>=0.11",
   "pypdfium2>=4.30",
   "python-multipart>=0.0.9",
   "funasr>=1.2",
@@ -19,15 +21,20 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "httpx>=0.27",
+  "python-docx>=1.2",
   "pytest>=8.2",
+  "reportlab>=4",
 ]
+
+[project.entry-points."markitdown.plugin"]
+file2doc-markitdown-visual = "file2doc_markitdown_visual"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/file2doc"]
+packages = ["src/file2doc", "src/file2doc_markitdown_visual"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
