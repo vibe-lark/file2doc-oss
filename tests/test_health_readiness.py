@@ -9,9 +9,9 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
 ):
     model_dir = tmp_path / "models"
     model_dir.mkdir()
-    monkeypatch.setenv("FILE2DOC_OCR_API_KEY", "secret")
-    monkeypatch.setenv("FILE2DOC_OCR_BASE_URL", "https://ocr.example.test")
-    monkeypatch.setenv("FILE2DOC_OCR_MODEL", "doubao-ocr")
+    monkeypatch.setenv("FILE2DOC_VISUAL_API_KEY", "secret")
+    monkeypatch.setenv("FILE2DOC_VISUAL_BASE_URL", "https://ark.example.test/api/v3")
+    monkeypatch.setenv("FILE2DOC_VISUAL_MODEL", "ep-visual")
     client = TestClient(
         create_app(
             storage_root=tmp_path / "storage",
@@ -25,7 +25,7 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
 
     assert response.status_code == 200
     assert response.json() == {
-        "service_version": "0.1.23",
+        "service_version": "0.1.27",
         "supported_source_groups": ["pdf", "office", "text", "audio", "video"],
         "auth_required": True,
         "storage_root": str(tmp_path / "storage"),
@@ -35,7 +35,19 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
         "transcript_segments_supported": True,
         "transcript_timestamps_supported": True,
         "ffmpeg_available": True,
-        "remote_ocr_configured": True,
+        "visual_parsing_configured": True,
+        "visual_provider": "ark-responses",
+        "visual_model": "ep-visual",
+        "visual_result_schema_version": "file2doc.visual-result.v1",
+        "visual_tool_actions": {
+            "zoom": True,
+            "rotate": True,
+            "point": False,
+            "grounding": False,
+        },
+        "visual_item_timeout_seconds": 300,
+        "visual_job_deadline_seconds": 900,
+        "visual_max_concurrency": 4,
         "page_image_dpi_options": [144, 216, 288],
         "page_image_dpi_default": 144,
     }
@@ -52,7 +64,7 @@ def test_healthz_is_public_and_returns_service_status(tmp_path):
     assert response.json() == {
         "status": "ok",
         "service": "file2doc",
-        "service_version": "0.1.23",
+        "service_version": "0.1.27",
     }
 
 
@@ -67,10 +79,11 @@ def test_readyz_is_public_and_checks_storage_and_sqlite(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "service_version": "0.1.23",
+        "service_version": "0.1.27",
         "local_asr_engine": "funasr-local",
         "local_asr_model_present": False,
         "ffmpeg_available": True,
+        "visual_parsing_configured": False,
         "checks": {
             "storage_root": {"status": "ok"},
             "sqlite": {"status": "ok"},
@@ -119,7 +132,7 @@ def test_skill_version_endpoint_reports_installed_version_status(tmp_path):
     )
 
     assert response.status_code == 200
-    assert response.json()["service_version"] == "0.1.23"
+    assert response.json()["service_version"] == "0.1.27"
     assert response.json()["skill"]["update_available"] is True
     assert response.json()["skill"]["update_required"] is False
 

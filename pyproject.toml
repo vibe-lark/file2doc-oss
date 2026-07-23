@@ -1,6 +1,6 @@
 [project]
 name = "file2doc"
-version = "0.1.25"
+version = "0.1.27"
 description = "HTTP-first offline file parsing service for agent-friendly result packages."
 requires-python = ">=3.12"
 dependencies = [

@@ -2,7 +2,7 @@
 name: file2doc-http
 description: Parse offline files with the File2Doc HTTP API and retrieve Markdown, manifest, media artifacts, transcripts, and video frames. Use when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
 metadata:
-  version: "0.1.25"
+  version: "0.1.27"
 ---
 
 # File2Doc HTTP
@@ -14,7 +14,7 @@ the local file bytes.
 
 ```bash
 BASE_URL=${BASE_URL:-https://file2doc.solutionsuite.cn}
-SKILL_VERSION=0.1.25
+SKILL_VERSION=0.1.27
 
 curl -fsS "$BASE_URL/skills/file2doc-http/version.json?installed_version=$SKILL_VERSION"
 
@@ -37,7 +37,7 @@ started with auth enabled.
    `update_required` is true, show the supplied update command and stop. If only
    `update_available` is true, mention it without blocking the task.
 2. Upload with `POST /parse-jobs/upload` and send
-   `X-File2Doc-Skill-Version: 0.1.25` on upload, status, and result requests.
+   `X-File2Doc-Skill-Version: 0.1.27` on upload, status, and result requests.
 3. Poll `GET /parse-jobs/{job_id}` until `completed`,
    `completed_with_warnings`, or `failed`.
 4. If failed, read `error.code` and stop result retrieval because no package
@@ -48,9 +48,9 @@ started with auth enabled.
    `GET /parse-jobs/{job_id}/artifacts/{artifact_id}`.
 8. For media, choose items from `media_index` and download each item's
    `artifact_id` through the same artifact endpoint.
-9. For an embedded image or scanned page, read its structured semantic result
-   from `visual_result_artifact_id` when present. Treat a missing value plus
-   `visual_parse_status: warning` as a partial result, not a missing file path.
+9. For PDF sources, use complete `page_image` media and the page OCR sidecar,
+   which combines native text with VLM semantics for unresolved visual regions.
+   For Office embedded images, read `visual_result_artifact_id` when present.
 10. Use `GET /parse-jobs/{job_id}/package` only for full zip export or debugging.
 
 ## Final Document
@@ -128,8 +128,10 @@ Trust the manifest over guessed paths.
 
 - `content` points to the primary Markdown artifact.
 - `artifacts` is an array, not a map.
-- `media_index` lists page images, thumbnails, embedded images, and video frames.
-- Visual media keep the original bytes in `artifact_id` and link the structured
+- `media_index` lists complete page images, thumbnails, Office embedded images,
+  and video frames. PDF embedded-object inputs and provider Zoom/Rotate results are
+  internal inspection views and are not result media.
+- Office visual media keep the original bytes in `artifact_id` and link the structured
   `description`, `visible_text`, `layout`, and `warnings` JSON through
   `visual_result_artifact_id`.
 - `timeline` contains video frame time anchors.
@@ -143,8 +145,9 @@ Trust the manifest over guessed paths.
 
 ## Modality Notes
 
-- PDF: use Markdown plus page images or thumbnails when available. Embedded
-  images and scanned page renders include VLM-produced semantic results.
+- PDF: use Markdown plus complete page images or thumbnails. Extractable text is
+  parsed natively; VLM semantics are added only for unresolved visual regions or
+  scanned pages and are exposed through the page OCR sidecar.
 - Office: use Markdown plus embedded image media and linked Visual Parse Result
   artifacts. Visual results contain description, visible text, layout, and
   uncertainty warnings.

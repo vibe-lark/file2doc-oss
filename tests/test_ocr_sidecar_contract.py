@@ -45,5 +45,5 @@ def test_uploaded_pdf_manifest_includes_downloadable_not_configured_ocr_sidecar(
         "engine": None,
         "text": "",
         "blocks": [],
-        "warnings": ["OCR is not configured for this deployment."],
+        "warnings": ["Visual Parsing is not configured for this deployment."],
     }

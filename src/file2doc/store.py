@@ -148,7 +148,8 @@ class JobStore:
         }
         page_index: list[dict] = []
         media_index: list[dict] = []
-        if is_pdf_source(source_path, job["source"]["content_type"]):
+        source_is_pdf = is_pdf_source(source_path, job["source"]["content_type"])
+        if source_is_pdf:
             page_index, media_index, visual_artifacts = render_pdf_visual_assets(
                 source_path,
                 result_root,
@@ -163,7 +164,7 @@ class JobStore:
         visual_media, visual_result_artifacts = self._write_visual_results(
             parsed,
             result_root=result_root,
-            job_expires_at=job["expires_at"],
+            publish_source_media=not source_is_pdf,
         )
         media_index.extend(visual_media)
         artifacts.update(visual_result_artifacts)
@@ -222,8 +223,10 @@ class JobStore:
         parsed,
         *,
         result_root: Path,
-        job_expires_at: str,
+        publish_source_media: bool,
     ) -> tuple[list[dict], dict[str, dict]]:
+        if not publish_source_media:
+            return [], {}
         media_index: list[dict] = []
         artifacts: dict[str, dict] = {}
         results_by_ref = {result.source_ref: result for result in parsed.visual_results}
@@ -291,33 +294,6 @@ class JobStore:
                     }
                 )
 
-        diagnostic_expires_at = min(
-            _now() + timedelta(hours=1),
-            _parse_iso(job_expires_at),
-        )
-        for index, diagnostic in enumerate(parsed.visual_artifacts, 1):
-            extension = ".png" if diagnostic.media_type == "image/png" else ".jpg"
-            path = Path(f"diagnostics/image-process/{index:04d}{extension}")
-            absolute_path = result_root / path
-            absolute_path.parent.mkdir(parents=True, exist_ok=True)
-            absolute_path.write_bytes(diagnostic.content)
-            artifact_id = _id("art")
-            artifacts[artifact_id] = {
-                "artifact_id": artifact_id,
-                "kind": diagnostic.kind,
-                "path": path.as_posix(),
-                "media_type": diagnostic.media_type,
-                "source_ref": diagnostic.source_ref,
-                "diagnostic_ref": diagnostic.diagnostic_ref,
-                "image_process": {
-                    "action": diagnostic.action_type,
-                    "arguments": dict(diagnostic.arguments),
-                    "status": diagnostic.status,
-                    "warnings": list(diagnostic.warnings),
-                },
-                "diagnostic_only": True,
-                "expires_at": _iso(diagnostic_expires_at),
-            }
         return media_index, artifacts
 
     def _complete_audio_job(self, job: dict, source_path: Path, result_root: Path) -> None:

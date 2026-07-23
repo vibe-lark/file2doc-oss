@@ -40,6 +40,10 @@ _Avoid_: API version, format version
 The original offline file submitted for parsing, normally provided through file upload and optionally through a service-local path in deployment-local workflows.
 _Avoid_: Input, asset
 
+**Source Semantic Fidelity**:
+The invariant that a Parse Result may expose source content in a more consumable form but must not change its semantic scope. Provider-side crops, zooms, rotations, and other inspection views never replace the complete source page or image in public output.
+_Avoid_: Pixel-perfect reproduction, visual cleanup
+
 **File Upload**:
 The general source entry point where an agent sends file bytes to File2Doc over HTTP.
 _Avoid_: Remote path, local path upload
@@ -79,11 +83,11 @@ separate OCR engine; new consumers should use the linked Visual Parse Result.
 _Avoid_: OCR engine output, OCR fallback
 
 **Visual Parsing**:
-Pixel-level interpretation performed by the configured vision-language model for an individual page render or embedded image. It turns a visual asset that would otherwise require downstream Agent inspection into semantic, agent-readable content. File2Doc does not maintain a separate traditional OCR engine; all pixel-level text recognition is part of Visual Parsing. The document converter inserts the result at the Visual Item's source position, but surrounding page or document context is not part of the VLM request.
+Pixel-level interpretation performed by the configured vision-language model only for content that native parsing cannot recover, such as an embedded visual region or scanned page. It turns that content into semantic, agent-readable text while native PDF text remains owned by the native parser. File2Doc does not maintain a separate traditional OCR engine.
 _Avoid_: Traditional OCR, image-to-text fallback, VLM OCR
 
 **Visual Item**:
-A page render or embedded image selected from a PDF or Office source for Visual Parsing. A Visual Item remains linked to its source page, slide, sheet, or document position.
+A scanned page render or embedded visual region selected from a PDF or Office source for Visual Parsing. It remains linked to its complete source page, slide, sheet, or document position and is not itself published as a replacement for that source unit.
 _Avoid_: OCR input, screenshot, loose image
 
 **Visual Parse Result**:
@@ -99,11 +103,11 @@ The runtime adapter through which File2Doc invokes a Vision-Language Model. The 
 _Avoid_: OCR endpoint, model URL
 
 **Visual Tool Action**:
-A provider-side operation such as zooming or rotating a Visual Item to resolve small, ambiguous, or incorrectly oriented content. Its type, safe arguments, status, and short-lived diagnostic image remain traceable from the Visual Parse Result.
+A provider-side operation such as zooming or rotating a Visual Item to resolve small, ambiguous, or incorrectly oriented content. It is a temporary inspection view only. Safe action metadata may remain traceable, but the transformed image is not part of the Result Package.
 _Avoid_: Image edit, preprocessing step
 
 **Content Markdown**:
-The clean, agent-readable Markdown body of a parse result, optimized for understanding and rearrangement rather than source-page fidelity.
+The clean, agent-readable Markdown body of a parse result. For PDF sources it retains complete page-image references and combines native text with semantic descriptions of unresolved visual regions.
 _Avoid_: OCR dump, raw markdown
 
 **Page Index**:

@@ -34,98 +34,103 @@ def render_pdf_visual_assets(
     page_index = [_page_index_entry(page_number) for page_number in range(1, page_count + 1)]
     if page_count == 0:
         return page_index, [], {}
+    media_index: list[dict] = []
+    artifacts: dict[str, dict] = {}
+    for page_number in range(1, page_count + 1):
+        page_image_path = Path(f"images/pages/page_{page_number:03d}.png")
+        thumbnail_path = Path(f"images/thumbs/page_{page_number:03d}.jpg")
+        ocr_path = Path(f"ocr/page_{page_number:03d}.json")
+        (result_root / page_image_path).parent.mkdir(parents=True, exist_ok=True)
+        (result_root / thumbnail_path).parent.mkdir(parents=True, exist_ok=True)
+        (result_root / ocr_path).parent.mkdir(parents=True, exist_ok=True)
 
-    page_number = 1
-    page_image_path = Path("images/pages/page_001.png")
-    thumbnail_path = Path("images/thumbs/page_001.jpg")
-    ocr_path = Path("ocr/page_001.json")
-    (result_root / page_image_path).parent.mkdir(parents=True, exist_ok=True)
-    (result_root / thumbnail_path).parent.mkdir(parents=True, exist_ok=True)
-    (result_root / ocr_path).parent.mkdir(parents=True, exist_ok=True)
+        image = document[page_number - 1].render(
+            scale=page_image_dpi / 72
+        ).to_pil()
+        image.save(result_root / page_image_path)
 
-    page = document[0]
-    bitmap = page.render(scale=page_image_dpi / 72)
-    image = bitmap.to_pil()
-    image.save(result_root / page_image_path)
-
-    thumbnail = image.copy()
-    thumbnail.thumbnail((thumbnail_max_edge, thumbnail_max_edge))
-    if thumbnail.mode != "RGB":
-        thumbnail = thumbnail.convert("RGB")
-    thumbnail.save(result_root / thumbnail_path, format="JPEG")
-    (result_root / ocr_path).write_text(
-        json.dumps(
-            _visual_text_sidecar(
-                page_number,
-                visual_results,
-                visual_configured=visual_configured,
+        thumbnail = image.copy()
+        thumbnail.thumbnail((thumbnail_max_edge, thumbnail_max_edge))
+        if thumbnail.mode != "RGB":
+            thumbnail = thumbnail.convert("RGB")
+        thumbnail.save(result_root / thumbnail_path, format="JPEG")
+        (result_root / ocr_path).write_text(
+            json.dumps(
+                _visual_text_sidecar(
+                    page_number,
+                    visual_results,
+                    visual_configured=visual_configured,
+                ),
+                ensure_ascii=False,
+                indent=2,
             ),
-            ensure_ascii=False,
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+            encoding="utf-8",
+        )
 
-    page_image_artifact_id = new_artifact_id()
-    thumbnail_artifact_id = new_artifact_id()
-    ocr_artifact_id = new_artifact_id()
-    page_image_id = "page-1-image"
-    thumbnail_id = "page-1-thumb"
-
-    media_index = [
-        {
-            "id": page_image_id,
-            "kind": "page_image",
-            "page": page_number,
-            "path": page_image_path.as_posix(),
-            "artifact_id": page_image_artifact_id,
-            "media_type": "image/png",
+        page_image_artifact_id = new_artifact_id()
+        thumbnail_artifact_id = new_artifact_id()
+        ocr_artifact_id = new_artifact_id()
+        page_image_id = f"page-{page_number}-image"
+        thumbnail_id = f"page-{page_number}-thumb"
+        media_index.extend(
+            [
+                {
+                    "id": page_image_id,
+                    "kind": "page_image",
+                    "page": page_number,
+                    "path": page_image_path.as_posix(),
+                    "artifact_id": page_image_artifact_id,
+                    "media_type": "image/png",
+                    "thumbnail_id": thumbnail_id,
+                    "thumbnail_path": thumbnail_path.as_posix(),
+                    "thumbnail_artifact_id": thumbnail_artifact_id,
+                    "source_ref": {"type": "page", "page": page_number},
+                    "derived": False,
+                },
+                {
+                    "id": thumbnail_id,
+                    "kind": "thumbnail",
+                    "page": page_number,
+                    "path": thumbnail_path.as_posix(),
+                    "artifact_id": thumbnail_artifact_id,
+                    "media_type": "image/jpeg",
+                    "source_ref": {"type": "page", "page": page_number},
+                    "derived": False,
+                },
+            ]
+        )
+        page_index[page_number - 1] = page_index[page_number - 1] | {
+            "page_image_id": page_image_id,
             "thumbnail_id": thumbnail_id,
-            "thumbnail_path": thumbnail_path.as_posix(),
-            "thumbnail_artifact_id": thumbnail_artifact_id,
-            "source_ref": {"type": "page", "page": page_number},
-            "derived": False,
-        },
-        {
-            "id": thumbnail_id,
-            "kind": "thumbnail",
-            "page": page_number,
-            "path": thumbnail_path.as_posix(),
-            "artifact_id": thumbnail_artifact_id,
-            "media_type": "image/jpeg",
-            "source_ref": {"type": "page", "page": page_number},
-            "derived": False,
-        },
-    ]
-    page_index[0] = page_index[0] | {
-        "page_image_id": page_image_id,
-        "thumbnail_id": thumbnail_id,
-        "ocr_artifact_id": ocr_artifact_id,
-        "ocr_path": ocr_path.as_posix(),
-    }
-    artifacts = {
-        page_image_artifact_id: {
-            "artifact_id": page_image_artifact_id,
-            "kind": "page_image",
-            "path": page_image_path.as_posix(),
-            "media_type": "image/png",
-            "page": page_number,
-        },
-        thumbnail_artifact_id: {
-            "artifact_id": thumbnail_artifact_id,
-            "kind": "thumbnail",
-            "path": thumbnail_path.as_posix(),
-            "media_type": "image/jpeg",
-            "page": page_number,
-        },
-        ocr_artifact_id: {
-            "artifact_id": ocr_artifact_id,
-            "kind": "ocr_sidecar",
-            "path": ocr_path.as_posix(),
-            "media_type": "application/json; charset=utf-8",
-            "page": page_number,
-        },
-    }
+            "ocr_artifact_id": ocr_artifact_id,
+            "ocr_path": ocr_path.as_posix(),
+        }
+        artifacts.update(
+            {
+                page_image_artifact_id: {
+                    "artifact_id": page_image_artifact_id,
+                    "kind": "page_image",
+                    "path": page_image_path.as_posix(),
+                    "media_type": "image/png",
+                    "page": page_number,
+                },
+                thumbnail_artifact_id: {
+                    "artifact_id": thumbnail_artifact_id,
+                    "kind": "thumbnail",
+                    "path": thumbnail_path.as_posix(),
+                    "media_type": "image/jpeg",
+                    "page": page_number,
+                },
+                ocr_artifact_id: {
+                    "artifact_id": ocr_artifact_id,
+                    "kind": "ocr_sidecar",
+                    "path": ocr_path.as_posix(),
+                    "media_type": "application/json; charset=utf-8",
+                    "page": page_number,
+                },
+            }
+        )
+    document.close()
     return page_index, media_index, artifacts
 
 

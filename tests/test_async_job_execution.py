@@ -6,9 +6,9 @@ from file2doc.app import create_app
 
 
 def test_upload_returns_before_slow_parser_finishes(tmp_path, monkeypatch):
-    def slow_parse(source_path, content_type):
+    def slow_parse(source_path, content_type, options=None):
         time.sleep(0.4)
-        return original_parse(source_path, content_type)
+        return original_parse(source_path, content_type, options)
 
     import file2doc.store as store_module
 
@@ -44,9 +44,9 @@ def test_upload_returns_before_slow_parser_finishes(tmp_path, monkeypatch):
 
 
 def test_running_parser_updates_job_status_before_completion(tmp_path, monkeypatch):
-    def slow_parse(source_path, content_type):
+    def slow_parse(source_path, content_type, options=None):
         time.sleep(0.5)
-        return original_parse(source_path, content_type)
+        return original_parse(source_path, content_type, options)
 
     import file2doc.store as store_module
 
@@ -74,9 +74,9 @@ def test_running_parser_updates_job_status_before_completion(tmp_path, monkeypat
 
 
 def test_parse_job_metrics_report_queue_and_running_counts(tmp_path, monkeypatch):
-    def slow_parse(source_path, content_type):
+    def slow_parse(source_path, content_type, options=None):
         time.sleep(0.5)
-        return original_parse(source_path, content_type)
+        return original_parse(source_path, content_type, options)
 
     import file2doc.store as store_module
 

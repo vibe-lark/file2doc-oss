@@ -3,30 +3,23 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
-import ipaddress
 import json
 import locale
 import logging
 import mimetypes
 import subprocess
-import socket
 import threading
 import time
-import urllib.request
-from urllib.error import HTTPError
-from urllib.parse import urlsplit
 from dataclasses import dataclass
 from typing import Any, BinaryIO
 
 from markitdown import DocumentConverter, DocumentConverterResult, StreamInfo
-from PIL import Image, UnidentifiedImageError
 
 
 logger = logging.getLogger("file2doc.visual")
 VISUAL_PROVIDER = "ark-responses"
 VISUAL_RESULT_SCHEMA_VERSION = "file2doc.visual-result.v1"
 VISUAL_PROMPT_VERSION = "1"
-MAX_VISUAL_DIAGNOSTIC_BYTES = 20 * 1024 * 1024
 DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS = (
     "ark-ams-storage-cn-beijing.tos-cn-beijing.volces.com",
 )
@@ -332,7 +325,10 @@ class VisualImageConverter(DocumentConverter):
                                         "visible text exactly in source reading order, and explain "
                                         "the layout and relationships between major elements. Use "
                                         "Rotate when orientation impairs reading and Zoom when small "
-                                        "or ambiguous content needs inspection. Report uncertainty, "
+                                        "or ambiguous content needs inspection. Treat tool results "
+                                        "only as temporary views of the original image. The final "
+                                        "result must describe the complete original image and preserve "
+                                        "relationships across every inspected region. Report uncertainty, "
                                         "blur, obstruction, or unreadable content in warnings. Do "
                                         "not infer hidden facts, business fields, or domain conclusions."
                                     ),
@@ -353,17 +349,7 @@ class VisualImageConverter(DocumentConverter):
                     timeout=timeout,
                 )
             )
-            remaining = max(
-                execution_policy.deadline_at - time.monotonic(),
-                0.001,
-            )
-            image_process_audits = _collect_image_process_audits(
-                response,
-                collector=self._artifact_collector,
-                source_ref=source_ref,
-                timeout=min(execution_policy.item_timeout_seconds, remaining),
-                allowed_hosts=self._artifact_allowed_hosts,
-            )
+            image_process_audits = _collect_image_process_audits(response)
         except Exception as error:
             logger.warning(
                 "visual_provider_request_failed provider=%s model=%s error_type=%s",
@@ -490,14 +476,7 @@ def _media_type(stream_info: StreamInfo) -> str:
     return guessed or "application/octet-stream"
 
 
-def _collect_image_process_audits(
-    response: Any,
-    *,
-    collector: VisualArtifactCollector | None,
-    source_ref: str,
-    timeout: float,
-    allowed_hosts: tuple[str, ...],
-) -> tuple[ImageProcessAudit, ...]:
+def _collect_image_process_audits(response: Any) -> tuple[ImageProcessAudit, ...]:
     audits: list[ImageProcessAudit] = []
     for item in getattr(response, "output", None) or []:
         if _field(item, "type") != "image_process":
@@ -513,42 +492,12 @@ def _collect_image_process_audits(
             or _normalized_text(_field(action, "status"))
         )
         warnings = _provider_tool_warnings(item, action)
-        result_url = _field(action, "result_image_url") or _field(
-            item, "result_image_url"
-        )
-        diagnostic_ref = None
-        if action_type in {"zoom", "rotate"} and isinstance(result_url, str):
-            if collector is not None:
-                try:
-                    media_type, content = _download_provider_image(
-                        result_url,
-                        timeout=timeout,
-                        allowed_hosts=allowed_hosts,
-                    )
-                except Exception as error:
-                    raise VisualParseError(
-                        f"Image Process {action_type} result could not be retained: {error}"
-                    ) from error
-                diagnostic_ref = f"{source_ref}:image_process:{index:04d}"
-                collector.add(
-                    VisualDiagnosticArtifact(
-                        kind=f"image_process_{action_type}_result",
-                        source_ref=source_ref,
-                        diagnostic_ref=diagnostic_ref,
-                        media_type=media_type,
-                        content=content,
-                        action_type=action_type,
-                        arguments=arguments,
-                        status=status,
-                        warnings=warnings,
-                    )
-                )
         audits.append(
             ImageProcessAudit(
                 action_type=action_type,
                 arguments=arguments,
                 status=status,
-                diagnostic_ref=diagnostic_ref,
+                diagnostic_ref=None,
                 warnings=warnings,
             )
         )
@@ -607,68 +556,6 @@ def _field(value: Any, name: str) -> Any:
     return getattr(value, name, None)
 
 
-def _download_provider_image(
-    url: str,
-    *,
-    timeout: float,
-    allowed_hosts: tuple[str, ...],
-) -> tuple[str, bytes]:
-    if url.startswith("data:"):
-        header, encoded = url.split(",", 1)
-        if ";base64" not in header:
-            raise ValueError("provider image data URL is not base64 encoded")
-        media_type = header[5:].split(";", 1)[0] or "application/octet-stream"
-        content = base64.b64decode(encoded, validate=True)
-    else:
-        _validate_provider_image_url(url, allowed_hosts=allowed_hosts)
-        opener = urllib.request.build_opener(_NoRedirectHandler())
-        try:
-            with opener.open(url, timeout=timeout) as response:
-                final_url = response.geturl()
-                if final_url != url:
-                    raise ValueError("provider image redirects are not allowed")
-                _validate_provider_image_url(
-                    final_url,
-                    allowed_hosts=allowed_hosts,
-                )
-                media_type = response.headers.get_content_type()
-                content = response.read(MAX_VISUAL_DIAGNOSTIC_BYTES + 1)
-        except HTTPError as error:
-            if 300 <= error.code < 400:
-                raise ValueError("provider image redirects are not allowed") from error
-            raise
-    if not content:
-        raise ValueError("provider image result is empty")
-    if len(content) > MAX_VISUAL_DIAGNOSTIC_BYTES:
-        raise ValueError("provider image result exceeds the diagnostic size limit")
-    try:
-        with Image.open(io.BytesIO(content)) as image:
-            image_format = (image.format or "").upper()
-            image.verify()
-    except (UnidentifiedImageError, OSError, ValueError) as error:
-        raise ValueError("provider image result is not a valid raster image") from error
-    detected_media_type = {
-        "PNG": "image/png",
-        "JPEG": "image/jpeg",
-        "JPG": "image/jpeg",
-    }.get(image_format)
-    if detected_media_type is None:
-        raise ValueError(f"unsupported provider image format: {image_format or 'unknown'}")
-    if media_type not in {
-        "image/png",
-        "image/jpeg",
-        "image/jpg",
-        "application/octet-stream",
-    }:
-        raise ValueError(f"unsupported provider image media type: {media_type}")
-    return detected_media_type, content
-
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, file_pointer, code, message, headers, new_url):
-        return None
-
-
 def _normalize_allowed_hosts(hosts: Any) -> tuple[str, ...]:
     if isinstance(hosts, str):
         values = hosts.split(",")
@@ -684,41 +571,6 @@ def _normalize_allowed_hosts(hosts: Any) -> tuple[str, ...]:
     if not normalized:
         raise VisualParseError("Visual diagnostic artifact host allowlist is empty")
     return normalized
-
-
-def _validate_provider_image_url(
-    url: str,
-    *,
-    allowed_hosts: tuple[str, ...],
-) -> None:
-    parsed = urlsplit(url)
-    hostname = (parsed.hostname or "").lower().rstrip(".")
-    if parsed.scheme != "https":
-        raise ValueError("provider image URL must use HTTPS")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("provider image URL must not contain credentials")
-    if parsed.port not in {None, 443}:
-        raise ValueError("provider image URL must use the default HTTPS port")
-    if hostname not in allowed_hosts:
-        raise ValueError("provider image host is not in the allowlist")
-    try:
-        addresses = {
-            item[4][0]
-            for item in socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)
-        }
-    except socket.gaierror as error:
-        raise ValueError("provider image host could not be resolved") from error
-    if not addresses:
-        raise ValueError("provider image host resolved to no addresses")
-    for value in addresses:
-        try:
-            address = ipaddress.ip_address(value)
-        except ValueError as error:
-            raise ValueError("provider image host returned an invalid address") from error
-        if not address.is_global:
-            raise ValueError("provider image host resolves to a non-public address")
-
-
 def _parse_visual_result(output_text: Any) -> dict[str, Any]:
     if not isinstance(output_text, str) or not output_text.strip():
         raise VisualParseError("Visual provider returned no structured output")

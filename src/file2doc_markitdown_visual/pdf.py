@@ -91,23 +91,31 @@ class VisualPdfConverter(DocumentConverter):
         page_items: list[list[_PageItem]] = []
         extraction_warnings: list[str] = []
         try:
-            with pdfplumber.open(io.BytesIO(source_bytes)) as document:
-                for page_index, page in enumerate(document.pages, 1):
-                    items = _page_items(page, page_index=page_index)
-                    if not any(item.markdown for item in items) and not any(
-                        item.image for item in items
-                    ):
-                        items.append(
-                            _PageItem(
-                                y=0,
-                                x=0,
-                                image=_render_full_page(source_bytes, page_index),
-                                location=f"page {page_index}",
-                            )
+            pdfium_document = pdfium.PdfDocument(source_bytes)
+            try:
+                with pdfplumber.open(io.BytesIO(source_bytes)) as document:
+                    for page_index, page in enumerate(document.pages, 1):
+                        items = _page_items(
+                            page,
+                            pdfium_page=pdfium_document[page_index - 1],
+                            page_index=page_index,
                         )
-                    page_items.append(
-                        sorted(items, key=lambda value: (value.y, value.x))
-                    )
+                        if not any(item.markdown for item in items) and not any(
+                            item.image for item in items
+                        ):
+                            items.append(
+                                _PageItem(
+                                    y=0,
+                                    x=0,
+                                    image=_render_full_page(source_bytes, page_index),
+                                    location=f"page {page_index}",
+                                )
+                            )
+                        page_items.append(
+                            sorted(items, key=lambda value: (value.y, value.x))
+                        )
+            finally:
+                pdfium_document.close()
         except Exception as error:
             page_items = _recover_page_items(source_bytes)
             extraction_warnings.append(
@@ -127,7 +135,10 @@ class VisualPdfConverter(DocumentConverter):
         warnings = list(extraction_warnings)
         usable_items = 0
         for page_index, items in enumerate(page_items, 1):
-            page_parts: list[str] = []
+            page_parts = [
+                f"![page-{page_index}-image]"
+                f"(images/pages/page_{page_index:03d}.png)"
+            ]
             for item in items:
                 if item.markdown:
                     page_parts.append(item.markdown)
@@ -152,7 +163,8 @@ class VisualPdfConverter(DocumentConverter):
                     continue
                 usable_items += 1
                 page_parts.append(
-                    f"### Visual item: {item.location}\n\n{visual_markdown}"
+                    f"### Visual region: {item.location}\n\n"
+                    f"{_without_source_image(visual_markdown)}"
                 )
             pages.append(f"## Page {page_index}\n\n" + "\n\n".join(page_parts))
 
@@ -289,7 +301,7 @@ class VisualPdfConverter(DocumentConverter):
         return visual.markdown
 
 
-def _page_items(page: Any, *, page_index: int) -> list[_PageItem]:
+def _page_items(page: Any, *, pdfium_page: Any, page_index: int) -> list[_PageItem]:
     words = sorted(page.extract_words(), key=lambda word: (word["top"], word["x0"]))
     text_lines: list[list[dict]] = []
     for word in words:
@@ -307,13 +319,12 @@ def _page_items(page: Any, *, page_index: int) -> list[_PageItem]:
         )
         for line in text_lines
     ]
-    for image_index, image in enumerate(page.images, 1):
-        x0 = float(image.get("x0", 0))
-        top = float(image.get("top", 0))
-        x1 = float(image.get("x1", x0))
-        bottom = float(image.get("bottom", top))
+    image_objects = pdfium_page.get_objects(filter=[pdfium.raw.FPDF_PAGEOBJ_IMAGE])
+    for image_index, image_object in enumerate(image_objects, 1):
+        x0, y0, x1, y1 = (float(value) for value in image_object.get_bounds())
+        top = max(float(page.height) - y1, 0)
         location = f"page {page_index} image {image_index}"
-        if x1 <= x0 or bottom <= top:
+        if x1 <= x0 or y1 <= y0:
             items.append(
                 _PageItem(
                     y=top,
@@ -324,9 +335,12 @@ def _page_items(page: Any, *, page_index: int) -> list[_PageItem]:
             )
             continue
         try:
-            cropped = page.crop((x0, top, x1, bottom)).to_image(resolution=144)
+            original = image_object.get_bitmap(
+                render=True,
+                scale_to_original=True,
+            ).to_pil()
             buffer = io.BytesIO()
-            cropped.original.save(buffer, format="PNG")
+            original.save(buffer, format="PNG")
             items.append(
                 _PageItem(
                     y=top,
@@ -341,10 +355,19 @@ def _page_items(page: Any, *, page_index: int) -> list[_PageItem]:
                     y=top,
                     x=x0,
                     location=location,
-                    failure=f"could not render image region: {error}",
+                    failure=f"could not decode the original embedded image: {error}",
                 )
             )
     return items
+
+
+def _without_source_image(markdown: str) -> str:
+    lines = markdown.splitlines()
+    if lines and lines[0].startswith("![visual-item-"):
+        lines = lines[1:]
+        while lines and not lines[0].strip():
+            lines.pop(0)
+    return "\n".join(lines)
 
 
 def _render_full_page(source_bytes: bytes, page_index: int) -> bytes:

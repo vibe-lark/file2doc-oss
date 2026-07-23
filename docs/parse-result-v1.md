@@ -70,19 +70,20 @@ An individual Visual Item failure is non-fatal. File2Doc preserves the original
 media, emits a warning, and packages all other usable or explicitly empty
 outputs. Empty Visual Parsing output does not become a top-level job failure.
 
-The first Visual Parsing release covers embedded images in PDF, DOCX, PPTX, and
-XLSX sources plus scanned PDF page renders. It does not add standalone image
-sources or apply Visual Parsing to extracted video frames.
+Visual Parsing covers embedded images in PDF, DOCX, PPTX, and XLSX sources plus
+scanned PDF page renders. Extractable PDF text remains on the native parser path;
+native-text-only pages do not call the Visual Provider. It does not add standalone
+image sources or apply Visual Parsing to extracted video frames.
 
-Each Visual Item remains available as an original Media Item. Its structured
-Visual Parse Result is stored as a separate JSON artifact and linked from the
-Media Index. Content Markdown inserts a concise semantic block at the Visual
-Item's source position so downstream agents can understand the image without
-opening it. Provider identity, model, latency, Visual Tool Actions, and
-tool-produced images belong to manifest diagnostics rather than normal Content
-Markdown.
+For PDF sources, complete page images remain the public Media Items. Decoded
+embedded objects are VLM inputs only; their semantics are combined with native
+text in page content and OCR sidecars, and the object bitmaps are not published
+as replacement media. Office Visual Items remain available as original Media
+Items with linked Visual Parse Result JSON. Provider Zoom/Rotate views are
+temporary inspection inputs and do not enter Content Markdown, the Media Index,
+or the Result Package; safe tool-action metadata remains traceable.
 
-The initial implementation is imported from the independently evolved
+The initial implementation was imported from the independently evolved
 `file2doc-markitdown-visual` v0.3.1 code used by rd-assistant, which itself is
 derived from Microsoft's MIT-licensed `markitdown-ocr` converters. File2Doc
 retains the upstream notices and source commit references, but owns a separate
@@ -97,7 +98,7 @@ schema version, and prompt version so a future cache can define correct
 invalidation rules.
 
 When the deployment provides valid `FILE2DOC_VISUAL_*` configuration, Visual
-Parsing runs automatically for every supported Visual Item. Upload callers do
+Parsing runs automatically for supported non-native Visual Items. Upload callers do
 not select or understand a separate OCR option, and the existing `agent` parser
 profile remains the default. Provider absence or temporary failure degrades to
 warnings and empty visual results. The capabilities endpoint reports whether
