@@ -262,7 +262,39 @@ curl -sS "$BASE_URL/metrics"
     "expired": 10,
     "total": 58,
     "max_concurrent": 2,
-    "active_background_tasks": 3
+    "active_background_tasks": 0,
+    "runtime": "durable"
+  },
+  "work_items": {
+    "queue_depth": 1,
+    "oldest_eligible_age_seconds": 12.4,
+    "active_leases": 2,
+    "expired_leases": 0,
+    "retries": 1,
+    "terminal_failures": 0
+  }
+}
+```
+
+Durable Parse Job status responses also include operator-visible execution
+state. `attempt` starts at 1, and `last_heartbeat_at` advances while a worker
+holds the lease:
+
+```json
+{
+  "execution": {
+    "work_items": [
+      {
+        "kind": "text_parse",
+        "status": "leased",
+        "attempt": 2,
+        "max_attempts": 3,
+        "worker_id": "file2doc-text-worker-abc:1:text_parse",
+        "attempt_status": "active",
+        "last_heartbeat_at": "2026-07-27T12:00:10Z",
+        "lease_expires_at": "2026-07-27T12:00:40Z"
+      }
+    ]
   }
 }
 ```

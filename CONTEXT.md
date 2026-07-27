@@ -134,6 +134,14 @@ _Avoid_: Regenerated output, extra image
 An asynchronous parsing task that tracks the lifecycle from source intake to result package availability.
 _Avoid_: Request, task
 
+**Work Item**:
+An independently executable unit of work within a Parse Job, such as transcript generation, frame extraction, visual parsing, or result assembly. Work Items may run concurrently and fail or retry independently without creating additional user-visible Parse Jobs.
+_Avoid_: Child job, sub-job, background task
+
+**Execution Lease**:
+A time-bounded claim that lets one worker execute a Work Item while heartbeats keep the claim active. An expired lease makes unfinished work eligible for another attempt, so a lost worker cannot leave a Parse Job permanently running.
+_Avoid_: Lock, worker ownership, task timeout
+
 **Progress Event**:
 A human- and agent-readable update that reports the current stage, completion estimate, and relevant details of a parse job.
 _Avoid_: Log line, status message

@@ -2,20 +2,33 @@ from __future__ import annotations
 
 import asyncio
 import os
-from pathlib import Path
 import shutil
+from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import Body, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    UploadFile,
+)
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 from file2doc.audio import AudioParseOptions
 from file2doc.parsers import ParseOptions
 from file2doc.rendering import AGENT_PAGE_IMAGE_DPI, ALLOWED_PAGE_IMAGE_DPI
 from file2doc.store import JobStore
-from file2doc.version import SERVICE_VERSION, skill_version_payload, with_version_metadata
+from file2doc.version import (
+    SERVICE_VERSION,
+    skill_version_payload,
+    with_version_metadata,
+)
 
 
 def create_app(
@@ -26,15 +39,18 @@ def create_app(
     audio_parse_options: AudioParseOptions | None = None,
     parse_options: ParseOptions | None = None,
     video_frame_extractor=None,
+    store=None,
+    execute_jobs_in_process: bool = True,
 ) -> FastAPI:
     root = Path(storage_root)
     capability_parse_options = parse_options or ParseOptions.from_env()
-    store = JobStore(
-        root,
-        audio_parse_options=audio_parse_options,
-        parse_options=capability_parse_options,
-        video_frame_extractor=video_frame_extractor,
-    )
+    if store is None:
+        store = JobStore(
+            root,
+            audio_parse_options=audio_parse_options,
+            parse_options=capability_parse_options,
+            video_frame_extractor=video_frame_extractor,
+        )
     app = FastAPI(
         title="File2Doc",
         version=SERVICE_VERSION,
@@ -88,10 +104,7 @@ def create_app(
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
-        checks = {
-            "storage_root": _check_storage_root(root),
-            "sqlite": _check_sqlite(store),
-        }
+        checks = _readiness_checks(store, root)
         asr_engine = _configured_asr_engine(audio_parse_options)
         asr_model_dir = _configured_asr_model_dir(audio_parse_options)
         status = (
@@ -123,9 +136,13 @@ def create_app(
         asr_model_dir = _configured_asr_model_dir(audio_parse_options)
         response = {
             "service_version": SERVICE_VERSION,
-            "supported_source_groups": ["pdf", "office", "text", "audio", "video"],
+            "supported_source_groups": getattr(
+                store,
+                "supported_source_groups",
+                ["pdf", "office", "text", "audio", "video"],
+            ),
             "auth_required": auth_enabled,
-            "storage_root": str(root),
+            "storage_root": getattr(store, "storage_description", str(root)),
             "local_asr_engine": asr_engine,
             "local_asr_configured": asr_model_dir is not None,
             "local_asr_model_present": _local_asr_model_present(asr_model_dir, asr_engine),
@@ -157,6 +174,8 @@ def create_app(
         max_upload_size_mb = _configured_max_upload_size_mb()
         if max_upload_size_mb is not None:
             response["max_upload_size_mb"] = max_upload_size_mb
+        if hasattr(store, "runtime_name"):
+            response["runtime"] = store.runtime_name
         return response
 
     @app.get("/skills/file2doc-http/version.json")
@@ -167,7 +186,7 @@ def create_app(
     async def metrics() -> dict:
         jobs = store.read_all_jobs()
         counts = _job_status_counts(jobs)
-        return {
+        response = {
             "jobs": {
                 "queued": counts["queued"],
                 "running": counts["running"],
@@ -178,8 +197,12 @@ def create_app(
                 "total": len(jobs),
                 "max_concurrent": max_concurrent_jobs,
                 "active_background_tasks": len(app.state.file2doc_background_tasks),
+                "runtime": getattr(store, "runtime_name", "local"),
             }
         }
+        if hasattr(store, "runtime_metrics"):
+            response["work_items"] = store.runtime_metrics()
+        return response
 
     @app.post("/parse-jobs/upload", status_code=201, dependencies=[Depends(require_auth)])
     async def upload_parse_job(
@@ -191,14 +214,25 @@ def create_app(
             Header(alias="X-File2Doc-Skill-Version"),
         ] = None,
     ) -> dict:
-        job = store.create_job(
-            filename=file.filename or "source",
-            content_type=file.content_type,
-            source_bytes=await file.read(),
-            parser_profile=parser_profile,
-            retention=retention,
-        )
-        _schedule_job_completion(job["job_id"])
+        if hasattr(store, "create_job_from_file"):
+            job = await asyncio.to_thread(
+                store.create_job_from_file,
+                filename=file.filename or "source",
+                content_type=file.content_type,
+                source_file=file.file,
+                parser_profile=parser_profile,
+                retention=retention,
+            )
+        else:
+            job = store.create_job(
+                filename=file.filename or "source",
+                content_type=file.content_type,
+                source_bytes=await file.read(),
+                parser_profile=parser_profile,
+                retention=retention,
+            )
+        if execute_jobs_in_process:
+            _schedule_job_completion(job["job_id"])
         return with_version_metadata(job, skill_version)
 
     def _schedule_job_completion(job_id: str) -> None:
@@ -244,8 +278,17 @@ def create_app(
         return with_version_metadata(store.read_manifest(job_id), skill_version)
 
     @app.get("/parse-jobs/{job_id}/artifacts/{artifact_id}", dependencies=[Depends(require_auth)])
-    async def get_artifact(job_id: str, artifact_id: str) -> FileResponse:
+    async def get_artifact(job_id: str, artifact_id: str) -> Response:
         artifact = store.read_artifact(job_id, artifact_id)
+        if "download" in artifact:
+            download = artifact["download"]
+            return Response(
+                download.content,
+                media_type=download.media_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{download.filename}"'
+                },
+            )
         return FileResponse(
             artifact["absolute_path"],
             media_type=artifact["media_type"],
@@ -253,10 +296,18 @@ def create_app(
         )
 
     @app.get("/parse-jobs/{job_id}/package", dependencies=[Depends(require_auth)])
-    async def get_package(job_id: str) -> FileResponse:
-        package_path = store.build_package_zip(job_id)
+    async def get_package(job_id: str) -> Response:
+        package = store.build_package_zip(job_id)
+        if not isinstance(package, Path):
+            return Response(
+                package.content,
+                media_type=package.media_type,
+                headers={
+                    "Content-Disposition": f'attachment; filename="{package.filename}"'
+                },
+            )
         return FileResponse(
-            package_path,
+            package,
             media_type="application/zip",
             filename=f"{job_id}.zip",
         )
@@ -309,6 +360,19 @@ def _check_sqlite(store: JobStore) -> dict[str, str]:
     except Exception as error:
         return {"status": "error", "detail": str(error)}
     return {"status": "ok"}
+
+
+def _readiness_checks(store, root: Path) -> dict[str, dict[str, str]]:
+    if hasattr(store, "check_readiness"):
+        try:
+            store.check_readiness()
+        except Exception as error:
+            return {"durable_runtime": {"status": "error", "detail": str(error)}}
+        return {"durable_runtime": {"status": "ok"}}
+    return {
+        "storage_root": _check_storage_root(root),
+        "sqlite": _check_sqlite(store),
+    }
 
 
 def _configured_asr_model_dir(options: AudioParseOptions | None) -> Path | None:

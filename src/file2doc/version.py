@@ -4,9 +4,9 @@ import re
 from typing import Any
 
 
-SERVICE_VERSION = "0.1.27"
+SERVICE_VERSION = "0.1.28"
 SKILL_NAME = "file2doc-http"
-SKILL_VERSION = "0.1.27"
+SKILL_VERSION = "0.1.28"
 MINIMUM_COMPATIBLE_SKILL_VERSION = "0.1.18"
 SKILL_VERSION_URL = (
     "https://file2doc.solutionsuite.cn/skills/file2doc-http/version.json"
