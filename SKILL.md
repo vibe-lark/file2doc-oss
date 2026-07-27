@@ -2,7 +2,7 @@
 name: file2doc-http
 description: Parse offline files with the File2Doc HTTP API and retrieve Markdown, manifest, media artifacts, transcripts, and video frames. Use when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
 metadata:
-  version: "0.1.27"
+  version: "0.1.28"
 ---
 
 # File2Doc HTTP
@@ -14,7 +14,7 @@ the local file bytes.
 
 ```bash
 BASE_URL=${BASE_URL:-https://file2doc.solutionsuite.cn}
-SKILL_VERSION=0.1.27
+SKILL_VERSION=0.1.28
 
 curl -fsS "$BASE_URL/skills/file2doc-http/version.json?installed_version=$SKILL_VERSION"
 
@@ -37,7 +37,7 @@ started with auth enabled.
    `update_required` is true, show the supplied update command and stop. If only
    `update_available` is true, mention it without blocking the task.
 2. Upload with `POST /parse-jobs/upload` and send
-   `X-File2Doc-Skill-Version: 0.1.27` on upload, status, and result requests.
+   `X-File2Doc-Skill-Version: 0.1.28` on upload, status, and result requests.
 3. Poll `GET /parse-jobs/{job_id}` until `completed`,
    `completed_with_warnings`, or `failed`.
 4. If failed, read `error.code` and stop result retrieval because no package

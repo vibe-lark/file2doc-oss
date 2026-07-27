@@ -417,9 +417,15 @@ def _convert_to_wav(source_path: Path, wav_path: Path, options: AudioParseOption
     except subprocess.TimeoutExpired as error:
         raise AudioParseFailure("ffmpeg_timeout", "ffmpeg audio extraction timed out.") from error
     except subprocess.CalledProcessError as error:
+        stderr = error.stderr.strip()
+        if _reports_missing_audio_stream(stderr):
+            raise AudioParseFailure(
+                "audio_track_absent",
+                "Video source does not contain an audio track.",
+            ) from error
         raise AudioParseFailure(
             "ffmpeg_failed",
-            f"ffmpeg audio extraction failed: {error.stderr.strip()}",
+            f"ffmpeg audio extraction failed: {stderr}",
         ) from error
     if not wav_path.is_file():
         raise AudioParseFailure("ffmpeg_failed", "ffmpeg did not produce a WAV file.")
@@ -437,6 +443,18 @@ def _ffmpeg_executable() -> str:
             "Audio transcript parsing requires ffmpeg or imageio-ffmpeg.",
         ) from error
     return imageio_ffmpeg.get_ffmpeg_exe()
+
+
+def _reports_missing_audio_stream(stderr: str) -> bool:
+    normalized = stderr.lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "does not contain any stream",
+            "matches no streams",
+            "no audio stream",
+        )
+    )
 
 
 def _coerce_transcript(result: Any) -> AudioTranscript:
