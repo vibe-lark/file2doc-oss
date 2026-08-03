@@ -19,8 +19,10 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import PlainTextResponse
 
 from file2doc.audio import AudioParseOptions
+from file2doc.observability import CapacityMetrics
 from file2doc.parsers import ParseOptions
 from file2doc.rendering import AGENT_PAGE_IMAGE_DPI, ALLOWED_PAGE_IMAGE_DPI
 from file2doc.store import JobStore
@@ -41,10 +43,16 @@ def create_app(
 ) -> FastAPI:
     root = Path(storage_root)
     capability_parse_options = parse_options or ParseOptions.from_env()
+    max_concurrent_jobs = _configured_max_concurrent_jobs()
+    metrics = CapacityMetrics(
+        job_configured_concurrency=max_concurrent_jobs,
+        visual_configured_concurrency=capability_parse_options.visual_max_concurrency,
+    )
+    capability_parse_options = capability_parse_options.with_metrics(metrics)
     store = JobStore(
         root,
         audio_parse_options=audio_parse_options,
-        parse_options=parse_options,
+        parse_options=capability_parse_options,
         video_frame_extractor=video_frame_extractor,
         visual_artifact_ttl_seconds=(
             capability_parse_options.visual_artifact_ttl_seconds
@@ -78,7 +86,8 @@ def create_app(
 
     app = FastAPI(title="File2Doc", version="0.1.0", lifespan=lifespan)
     app.state.file2doc_background_tasks = set()
-    job_semaphore = asyncio.Semaphore(_configured_max_concurrent_jobs())
+    app.state.file2doc_metrics = metrics
+    job_semaphore = asyncio.Semaphore(max_concurrent_jobs)
 
     async def require_auth(
         authorization: Annotated[str | None, Header()] = None,
@@ -92,6 +101,10 @@ def create_app(
     @app.get("/healthz")
     async def healthz() -> dict:
         return {"status": "ok", "service": "file2doc"}
+
+    @app.get("/metrics", response_class=PlainTextResponse)
+    async def metrics_endpoint() -> str:
+        return metrics.render()
 
     @app.get("/readyz")
     async def readyz() -> JSONResponse:
@@ -128,11 +141,23 @@ def create_app(
                 "image",
             ],
             "auth_required": auth_enabled,
+            "job_max_concurrency": max_concurrent_jobs,
             "storage_root": str(root),
             "local_asr_configured": asr_model_dir is not None,
             "local_asr_model_present": _local_asr_model_present(asr_model_dir),
             "ffmpeg_available": _ffmpeg_available(),
             "visual_parsing_configured": capability_parse_options.visual_configured,
+            "provider_roles": (
+                {
+                    "visual_understanding": {
+                        "endpoint_role": "visual",
+                        "provider": "ark-responses",
+                        "model": capability_parse_options.visual_model,
+                    }
+                }
+                if capability_parse_options.visual_configured
+                else {}
+            ),
             "visual_model": capability_parse_options.visual_model,
             "visual_item_timeout_seconds": (
                 capability_parse_options.visual_item_timeout_seconds
@@ -178,16 +203,28 @@ def create_app(
         return job
 
     def _schedule_job_completion(job_id: str) -> None:
-        task = asyncio.create_task(_run_job_completion(job_id))
+        queued_at = metrics.job_queued()
+        task = asyncio.create_task(_run_job_completion(job_id, queued_at))
         app.state.file2doc_background_tasks.add(task)
         task.add_done_callback(app.state.file2doc_background_tasks.discard)
 
-    async def _run_job_completion(job_id: str) -> None:
+    async def _run_job_completion(job_id: str, queued_at: float) -> None:
         async with job_semaphore:
+            processing_started_at = metrics.job_started(queued_at=queued_at)
+            store.mark_job_processing(job_id)
             try:
                 await asyncio.to_thread(store.complete_job, job_id)
             except Exception as error:
                 store.fail_job(job_id, "job_execution_failed", str(error))
+            finally:
+                status = store.read_job(job_id)["status"]
+                metrics.job_finished(
+                    succeeded=status in {"completed", "completed_with_warnings"},
+                    duration_seconds=asyncio.get_running_loop().time() - queued_at,
+                    processing_duration_seconds=(
+                        asyncio.get_running_loop().time() - processing_started_at
+                    ),
+                )
 
     @app.get("/parse-jobs/{job_id}", dependencies=[Depends(require_auth)])
     async def get_parse_job(job_id: str) -> dict:

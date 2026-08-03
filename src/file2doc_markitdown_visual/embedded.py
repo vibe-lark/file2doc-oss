@@ -35,12 +35,15 @@ class EmbeddedVisualParser:
         execution_config: VisualExecutionConfig | None = None,
         artifact_collector: VisualArtifactCollector | None = None,
         artifact_allowed_hosts: tuple[str, ...] = DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
+        metrics_observer=None,
     ) -> None:
         self._client = client
         self._model = model
         self._exiftool_path = exiftool_path
         self._execution_policy = execution_policy
-        self._execution_config = execution_config or VisualExecutionConfig()
+        self._execution_config = execution_config or VisualExecutionConfig(
+            metrics_observer=metrics_observer
+        )
         self._artifact_collector = artifact_collector
         self._artifact_allowed_hosts = artifact_allowed_hosts
 
@@ -54,6 +57,7 @@ class EmbeddedVisualParser:
             ),
             artifact_collector=self._artifact_collector,
             artifact_allowed_hosts=self._artifact_allowed_hosts,
+            metrics_observer=self._execution_config.metrics_observer,
         )
 
 
@@ -69,6 +73,7 @@ class EmbeddedVisualSession:
         execution_policy: VisualExecutionPolicy | None = None,
         artifact_collector: VisualArtifactCollector | None = None,
         artifact_allowed_hosts: tuple[str, ...] = DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
+        metrics_observer=None,
     ) -> None:
         self._converter = VisualImageConverter(
             client=client,
@@ -76,6 +81,7 @@ class EmbeddedVisualSession:
             execution_policy=execution_policy,
             artifact_collector=artifact_collector,
             artifact_allowed_hosts=artifact_allowed_hosts,
+            metrics_observer=metrics_observer,
         )
         self._exiftool_path = exiftool_path
         self._cache: dict[str, EmbeddedVisualResult] = {}

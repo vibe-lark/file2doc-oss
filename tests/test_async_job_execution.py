@@ -6,9 +6,9 @@ from file2doc.app import create_app
 
 
 def test_upload_returns_before_slow_parser_finishes(tmp_path, monkeypatch):
-    def slow_parse(source_path, content_type):
+    def slow_parse(source_path, content_type, options=None):
         time.sleep(0.4)
-        return original_parse(source_path, content_type)
+        return original_parse(source_path, content_type, options)
 
     import file2doc.store as store_module
 

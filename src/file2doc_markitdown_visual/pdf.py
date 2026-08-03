@@ -83,6 +83,7 @@ class VisualPdfConverter(DocumentConverter):
             execution_policy=execution_policy,
             artifact_collector=self._artifact_collector,
             artifact_allowed_hosts=self._artifact_allowed_hosts,
+            metrics_observer=self._execution_config.metrics_observer,
         )
         item_timeout_seconds = execution_policy.item_timeout_seconds
         job_deadline_seconds = execution_policy.job_deadline_seconds

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from importlib.metadata import PackageNotFoundError, version
 import os
 from pathlib import Path
@@ -49,6 +49,10 @@ class ParseOptions:
     visual_artifact_allowed_hosts: tuple[str, ...] = (
         DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS
     )
+    visual_metrics: Any | None = None
+
+    def with_metrics(self, metrics: Any) -> "ParseOptions":
+        return replace(self, visual_metrics=metrics)
 
     @classmethod
     def from_env(cls) -> "ParseOptions":
@@ -190,6 +194,7 @@ def _parse_with_visual_plugin(
             visual_max_concurrency=options.visual_max_concurrency,
             visual_artifact_collector=artifact_collector,
             visual_artifact_allowed_hosts=options.visual_artifact_allowed_hosts,
+            visual_metrics=options.visual_metrics,
         ).convert(source_path)
         content = result.text_content.strip()
     except Exception as error:  # MarkItDown wraps converter failures by design.

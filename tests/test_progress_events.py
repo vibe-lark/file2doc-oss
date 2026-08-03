@@ -22,6 +22,7 @@ def test_parse_job_exposes_progress_event_history(tmp_path):
     assert [event["stage"] for event in body["events"]] == [
         "queued",
         "intaking",
+        "processing",
         "parser_started",
         "assembling",
         "completed",
@@ -60,6 +61,7 @@ def test_audio_parse_job_reports_asr_progress_before_assembling(tmp_path):
     assert [event["stage"] for event in response.json()["events"]] == [
         "queued",
         "intaking",
+        "processing",
         "asr_running",
         "assembling",
         "completed",
@@ -134,6 +136,7 @@ def test_video_parse_job_reports_asr_and_frame_progress_before_assembling(tmp_pa
     assert [event["stage"] for event in response.json()["events"]] == [
         "queued",
         "intaking",
+        "processing",
         "asr_running",
         "video_frame_extracting",
         "assembling",

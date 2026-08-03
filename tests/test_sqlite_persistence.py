@@ -42,6 +42,7 @@ def test_completed_job_state_result_and_events_survive_app_recreation(tmp_path):
     assert [event["stage"] for event in events["events"]] == [
         "queued",
         "intaking",
+        "processing",
         "parser_started",
         "assembling",
         "completed",

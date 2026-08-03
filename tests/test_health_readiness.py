@@ -37,12 +37,20 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
     assert response.status_code == 200
     assert response.json() == {
         "supported_source_groups": ["pdf", "office", "text", "audio", "video", "image"],
-        "auth_required": True,
+            "auth_required": True,
+            "job_max_concurrency": 2,
         "storage_root": str(tmp_path / "storage"),
         "local_asr_configured": True,
         "local_asr_model_present": True,
         "ffmpeg_available": True,
-        "visual_parsing_configured": True,
+            "visual_parsing_configured": True,
+            "provider_roles": {
+                "visual_understanding": {
+                    "endpoint_role": "visual",
+                    "provider": "ark-responses",
+                    "model": "ep-visual",
+                }
+            },
         "visual_model": "ep-visual",
         "visual_item_timeout_seconds": 17,
         "visual_job_deadline_seconds": 61,

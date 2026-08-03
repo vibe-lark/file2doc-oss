@@ -110,6 +110,26 @@ class JobStore:
         self._append_event(job_id, "intaking", 10, "Source file stored")
         return self._public_create_response(job)
 
+    def mark_job_processing(self, job_id: str) -> None:
+        job = self.read_job(job_id)
+        if job["status"] != "queued":
+            return
+        started_at = _iso(_now())
+        job["status"] = "processing"
+        job["stage"] = "processing"
+        job["percent"] = 20
+        job["started_at"] = started_at
+        job["latest_progress"] = {
+            "stage": "processing",
+            "percent": 20,
+            "message": "Parse job processing started",
+            "detail": {},
+            "created_at": started_at,
+        }
+        self._persist_job(job)
+        self._write_json(self._job_root(job_id) / "job.json", job)
+        self._append_event(job_id, "processing", 20, "Parse job processing started")
+
     def complete_job(self, job_id: str) -> None:
         job = self.read_job(job_id)
         job_root = self._job_root(job_id)

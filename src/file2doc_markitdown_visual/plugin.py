@@ -113,6 +113,7 @@ class VisualExecutionConfig:
     item_timeout_seconds: float = 300
     job_deadline_seconds: float = 900
     max_concurrency: int = 4
+    metrics_observer: Any | None = None
 
     def create_policy(self) -> "VisualExecutionPolicy":
         return VisualExecutionPolicy(
@@ -173,6 +174,7 @@ class VisualImageConverter(DocumentConverter):
         max_concurrency: int = 4,
         artifact_collector: VisualArtifactCollector | None = None,
         artifact_allowed_hosts: tuple[str, ...] = DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
+        metrics_observer: Any | None = None,
     ) -> None:
         self._client = client
         self._model = model
@@ -186,6 +188,7 @@ class VisualImageConverter(DocumentConverter):
         self._artifact_allowed_hosts = _normalize_allowed_hosts(
             artifact_allowed_hosts
         )
+        self._metrics_observer = metrics_observer or self._execution_config.metrics_observer
 
     def accepts(
         self,
@@ -218,14 +221,20 @@ class VisualImageConverter(DocumentConverter):
         execution_policy = (
             self._execution_policy or self._execution_config.create_policy()
         )
-        logger.info(
-            "visual_provider_request_started provider=%s model=%s",
-            VISUAL_PROVIDER,
-            self._model,
-        )
-        try:
-            response = execution_policy.call(
-                lambda timeout: self._client.responses.create(
+        def provider_item(timeout: float):
+            started_at = (
+                self._metrics_observer.visual_provider_started()
+                if self._metrics_observer is not None
+                else time.monotonic()
+            )
+            usage = None
+            logger.info(
+                "visual_provider_request_started provider=%s model=%s",
+                VISUAL_PROVIDER,
+                self._model,
+            )
+            try:
+                response = self._client.responses.create(
                     model=self._model,
                     tools=[IMAGE_PROCESS_TOOL],
                     input=[
@@ -274,32 +283,47 @@ class VisualImageConverter(DocumentConverter):
                     extra_body={"thinking": {"type": "disabled"}},
                     timeout=timeout,
                 )
-            )
-            remaining = max(
-                execution_policy.deadline_at - time.monotonic(),
-                0.001,
-            )
-            image_process_audits = _collect_image_process_audits(
-                response,
-                collector=self._artifact_collector,
-                source_ref=source_ref,
-                timeout=min(execution_policy.item_timeout_seconds, remaining),
-                allowed_hosts=self._artifact_allowed_hosts,
-            )
-        except Exception as error:
-            logger.warning(
-                "visual_provider_request_failed provider=%s model=%s error_type=%s",
+                usage = getattr(response, "usage", None)
+                remaining = max(
+                    execution_policy.deadline_at - time.monotonic(),
+                    0.001,
+                )
+                image_process_audits = _collect_image_process_audits(
+                    response,
+                    collector=self._artifact_collector,
+                    source_ref=source_ref,
+                    timeout=min(execution_policy.item_timeout_seconds, remaining),
+                    allowed_hosts=self._artifact_allowed_hosts,
+                )
+                result = _parse_visual_result(getattr(response, "output_text", None))
+            except Exception as error:
+                if self._metrics_observer is not None:
+                    self._metrics_observer.visual_provider_finished(
+                        outcome=_provider_outcome(error),
+                        duration_seconds=time.monotonic() - started_at,
+                        usage=usage,
+                    )
+                logger.warning(
+                    "visual_provider_request_failed provider=%s model=%s error_type=%s",
+                    VISUAL_PROVIDER,
+                    self._model,
+                    type(error).__name__,
+                )
+                raise
+            if self._metrics_observer is not None:
+                self._metrics_observer.visual_provider_finished(
+                    outcome="success",
+                    duration_seconds=time.monotonic() - started_at,
+                    usage=usage,
+                )
+            logger.info(
+                "visual_provider_request_completed provider=%s model=%s",
                 VISUAL_PROVIDER,
                 self._model,
-                type(error).__name__,
             )
-            raise
-        logger.info(
-            "visual_provider_request_completed provider=%s model=%s",
-            VISUAL_PROVIDER,
-            self._model,
-        )
-        result = _parse_visual_result(getattr(response, "output_text", None))
+            return result, image_process_audits
+
+        result, image_process_audits = execution_policy.call(provider_item)
         return DocumentConverterResult(
             markdown=_render_markdown(
                 result,
@@ -323,6 +347,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         item_timeout_seconds=kwargs.get("visual_item_timeout_seconds", 300),
         job_deadline_seconds=kwargs.get("visual_job_deadline_seconds", 900),
         max_concurrency=kwargs.get("visual_max_concurrency", 4),
+        metrics_observer=kwargs.get("visual_metrics"),
     )
     artifact_collector = kwargs.get("visual_artifact_collector")
     artifact_allowed_hosts = _normalize_allowed_hosts(
@@ -338,6 +363,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
             execution_config=execution_config,
             artifact_collector=artifact_collector,
             artifact_allowed_hosts=artifact_allowed_hosts,
+            metrics_observer=execution_config.metrics_observer,
         ),
         priority=-1,
     )
@@ -387,6 +413,17 @@ def _media_type(stream_info: StreamInfo) -> str:
             return normalized
     guessed, _ = mimetypes.guess_type("image" + (stream_info.extension or ""))
     return guessed or "application/octet-stream"
+
+
+def _provider_outcome(error: BaseException) -> str:
+    status_code = getattr(error, "status_code", None)
+    if status_code == 429:
+        return "429"
+    if isinstance(status_code, int) and 500 <= status_code < 600:
+        return "5xx"
+    if isinstance(error, TimeoutError) or "timeout" in type(error).__name__.lower():
+        return "timeout"
+    return "other"
 
 
 def _collect_image_process_audits(
