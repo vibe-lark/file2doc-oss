@@ -60,6 +60,7 @@ def test_capabilities_exposes_capacity_and_safe_provider_roles(tmp_path, monkeyp
 
     assert capabilities["job_max_concurrency"] == 5
     assert capabilities["visual_max_concurrency"] == 3
+    assert capabilities["visual_concurrency_scope"] == "process"
     assert capabilities["provider_roles"] == {
         "visual_understanding": {
             "endpoint_role": "visual",
@@ -147,7 +148,7 @@ def test_visual_provider_metrics_track_real_parallel_calls_and_usage(
 ):
     entered = 0
     lock = threading.Lock()
-    both_entered = threading.Event()
+    first_entered = threading.Event()
     release = threading.Event()
     response = SimpleNamespace(
         output_text=json.dumps(
@@ -168,8 +169,8 @@ def test_visual_provider_metrics_track_real_parallel_calls_and_usage(
             nonlocal entered
             with lock:
                 entered += 1
-                if entered == 2:
-                    both_entered.set()
+                if entered == 1:
+                    first_entered.set()
             assert release.wait(timeout=10)
             return response
 
@@ -203,12 +204,14 @@ def test_visual_provider_metrics_track_real_parallel_calls_and_usage(
         for thread in threads:
             thread.start()
 
-        assert both_entered.wait(timeout=5)
+        assert first_entered.wait(timeout=5)
+        time.sleep(0.1)
+        assert entered == 1
         body = client.get("/metrics").text
         assert _metric_value(body, "file2doc_visual_max_concurrency") == 1
-        assert _metric_value(body, "file2doc_visual_items_active") == 2
-        assert _metric_value(body, "file2doc_visual_items_peak") == 2
-        assert _metric_value(body, "file2doc_visual_attempts_total") == 2
+        assert _metric_value(body, "file2doc_visual_items_active") == 1
+        assert _metric_value(body, "file2doc_visual_items_peak") == 1
+        assert _metric_value(body, "file2doc_visual_attempts_total") == 1
         assert "private-0.png" not in body
         assert "capacity-model" not in body
 

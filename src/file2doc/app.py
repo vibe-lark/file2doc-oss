@@ -166,6 +166,7 @@ def create_app(
                 capability_parse_options.visual_job_deadline_seconds
             ),
             "visual_max_concurrency": capability_parse_options.visual_max_concurrency,
+            "visual_concurrency_scope": "process",
             "visual_artifact_ttl_seconds": (
                 capability_parse_options.visual_artifact_ttl_seconds
             ),

@@ -69,6 +69,20 @@ class VisualItemNotProcessed(VisualParseError):
     """Raised when a visual item cannot start before the whole-job deadline."""
 
 
+class VisualConcurrencyGate:
+    """Process-scoped provider capacity shared by every visual parse job."""
+
+    def __init__(self, max_concurrency: int) -> None:
+        self.max_concurrency = max(1, int(max_concurrency))
+        self._semaphore = threading.BoundedSemaphore(self.max_concurrency)
+
+    def acquire(self, timeout: float) -> bool:
+        return self._semaphore.acquire(timeout=timeout)
+
+    def release(self) -> None:
+        self._semaphore.release()
+
+
 @dataclass(frozen=True)
 class VisualDiagnosticArtifact:
     kind: str
@@ -114,12 +128,27 @@ class VisualExecutionConfig:
     job_deadline_seconds: float = 900
     max_concurrency: int = 4
     metrics_observer: Any | None = None
+    concurrency_gate: VisualConcurrencyGate | None = None
+
+    def __post_init__(self) -> None:
+        gate = self.concurrency_gate
+        if gate is None:
+            object.__setattr__(
+                self,
+                "concurrency_gate",
+                VisualConcurrencyGate(self.max_concurrency),
+            )
+        elif gate.max_concurrency != max(1, int(self.max_concurrency)):
+            raise ValueError(
+                "visual concurrency gate does not match configured concurrency"
+            )
 
     def create_policy(self) -> "VisualExecutionPolicy":
         return VisualExecutionPolicy(
             item_timeout_seconds=self.item_timeout_seconds,
             job_deadline_seconds=self.job_deadline_seconds,
             max_concurrency=self.max_concurrency,
+            concurrency_gate=self.concurrency_gate,
         )
 
 
@@ -132,12 +161,15 @@ class VisualExecutionPolicy:
         item_timeout_seconds: float,
         job_deadline_seconds: float,
         max_concurrency: int,
+        concurrency_gate: VisualConcurrencyGate | None = None,
     ) -> None:
         self.item_timeout_seconds = max(float(item_timeout_seconds), 0.001)
         self.job_deadline_seconds = max(float(job_deadline_seconds), 0.001)
         self.max_concurrency = max(1, int(max_concurrency))
         self.deadline_at = time.monotonic() + self.job_deadline_seconds
-        self._semaphore = threading.BoundedSemaphore(self.max_concurrency)
+        self._concurrency_gate = concurrency_gate or VisualConcurrencyGate(
+            self.max_concurrency
+        )
 
     def call(self, operation):
         remaining = self.deadline_at - time.monotonic()
@@ -145,7 +177,7 @@ class VisualExecutionPolicy:
             raise VisualItemNotProcessed(
                 "visual item was not processed because the job deadline was reached"
             )
-        if not self._semaphore.acquire(timeout=remaining):
+        if not self._concurrency_gate.acquire(timeout=remaining):
             raise VisualItemNotProcessed(
                 "visual item was not processed because the job deadline was reached "
                 "while waiting for provider capacity"
@@ -158,7 +190,7 @@ class VisualExecutionPolicy:
                 )
             return operation(min(self.item_timeout_seconds, remaining))
         finally:
-            self._semaphore.release()
+            self._concurrency_gate.release()
 
 
 class VisualImageConverter(DocumentConverter):
@@ -348,6 +380,7 @@ def register_converters(markitdown, **kwargs: Any) -> None:
         job_deadline_seconds=kwargs.get("visual_job_deadline_seconds", 900),
         max_concurrency=kwargs.get("visual_max_concurrency", 4),
         metrics_observer=kwargs.get("visual_metrics"),
+        concurrency_gate=kwargs.get("visual_concurrency_gate"),
     )
     artifact_collector = kwargs.get("visual_artifact_collector")
     artifact_allowed_hosts = _normalize_allowed_hosts(

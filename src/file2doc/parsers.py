@@ -13,6 +13,7 @@ from file2doc_markitdown_visual import __version__ as visual_plugin_version
 from file2doc_markitdown_visual.plugin import (
     DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS,
     VisualArtifactCollector,
+    VisualConcurrencyGate,
     VisualDiagnosticArtifact,
 )
 
@@ -50,6 +51,20 @@ class ParseOptions:
         DEFAULT_VISUAL_ARTIFACT_ALLOWED_HOSTS
     )
     visual_metrics: Any | None = None
+    visual_concurrency_gate: VisualConcurrencyGate | None = None
+
+    def __post_init__(self) -> None:
+        gate = self.visual_concurrency_gate
+        if gate is None:
+            object.__setattr__(
+                self,
+                "visual_concurrency_gate",
+                VisualConcurrencyGate(self.visual_max_concurrency),
+            )
+        elif gate.max_concurrency != max(1, int(self.visual_max_concurrency)):
+            raise ValueError(
+                "visual concurrency gate does not match configured concurrency"
+            )
 
     def with_metrics(self, metrics: Any) -> "ParseOptions":
         return replace(self, visual_metrics=metrics)
@@ -195,6 +210,7 @@ def _parse_with_visual_plugin(
             visual_artifact_collector=artifact_collector,
             visual_artifact_allowed_hosts=options.visual_artifact_allowed_hosts,
             visual_metrics=options.visual_metrics,
+            visual_concurrency_gate=options.visual_concurrency_gate,
         ).convert(source_path)
         content = result.text_content.strip()
     except Exception as error:  # MarkItDown wraps converter failures by design.

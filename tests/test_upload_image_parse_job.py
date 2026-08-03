@@ -126,7 +126,7 @@ def test_uploaded_image_uses_vision_parser_and_exposes_source_image(
     manifest = client.get(job["result"]["manifest_url"]).json()
     assert manifest["parser"]["name"] == "file2doc-markitdown-visual"
     assert manifest["parser"]["markitdown_version"] == "0.1.2"
-    assert manifest["parser"]["visual_plugin_version"] == "0.3.2"
+    assert manifest["parser"]["visual_plugin_version"] == "0.3.3"
     source_media = next(
         item for item in manifest["media_index"] if item["kind"] == "source_image"
     )

@@ -55,6 +55,7 @@ def test_capabilities_is_public_and_reports_current_service_capabilities(
         "visual_item_timeout_seconds": 17,
         "visual_job_deadline_seconds": 61,
         "visual_max_concurrency": 3,
+        "visual_concurrency_scope": "process",
         "visual_artifact_ttl_seconds": 1200,
         "visual_artifact_release_grace_seconds": 45,
         "diagnostic_cleanup_interval_seconds": 17,
