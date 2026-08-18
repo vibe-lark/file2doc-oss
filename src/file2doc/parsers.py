@@ -7,7 +7,8 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any, Callable
 
-from markitdown import MarkItDown
+from markitdown import MarkItDown, StreamInfo
+from pptx import Presentation
 
 from file2doc_markitdown_visual import __version__ as visual_plugin_version
 from file2doc_markitdown_visual import register_converters as register_visual_converters
@@ -21,6 +22,11 @@ from file2doc_markitdown_visual.plugin import (
     VisualParseRecord,
     VisualSourceRecord,
 )
+from file2doc_markitdown_visual.pptx_semantics import (
+    dynamic_fields_for_slide,
+    inspect_off_canvas_shapes,
+)
+from file2doc_markitdown_visual.office import NativePptxConverter
 
 
 @dataclass(frozen=True)
@@ -133,20 +139,35 @@ def parse_content_markdown(
             started_at,
         )
 
-    return _parse_standard(source_path, parse_options, started_at)
+    return _parse_standard(source_path, parse_options, started_at, content_type)
 
 
 def _parse_standard(
     source_path: Path,
     options: ParseOptions,
     started_at: float,
+    content_type: str | None = None,
 ) -> ParsedContent:
     try:
-        result = options.markitdown_factory().convert(source_path)
+        if _media_type(content_type or "") == (
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        ) or source_path.suffix.lower() == ".pptx":
+            with source_path.open("rb") as source:
+                result = NativePptxConverter().convert(
+                    source,
+                    StreamInfo(
+                        filename=source_path.name,
+                        extension=".pptx",
+                        mimetype=(content_type or None),
+                    ),
+                )
+        else:
+            result = options.markitdown_factory().convert(source_path)
     except Exception as error:  # pragma: no cover - converter errors vary.
         raise ParseFailure("parser_failed", f"MarkItDown failed: {error}") from error
 
     content = result.text_content.strip()
+    warnings = _pptx_semantic_warnings(source_path, content_type or "")
     return ParsedContent(
         markdown=f"{content}\n" if content else "",
         diagnostics=_diagnostics(
@@ -155,6 +176,7 @@ def _parse_standard(
             elapsed_ms=_elapsed_ms(started_at),
             empty_result=not content,
         ),
+        warnings=warnings,
     )
 
 
@@ -179,7 +201,10 @@ def _parse_with_visual_plugin(
         )
         result = markitdown.convert(source_path)
         content = result.text_content.strip()
-        warnings = _warnings_from_markdown(content)
+        warnings = [
+            *_warnings_from_markdown(content),
+            *_pptx_semantic_warnings(source_path, content_type),
+        ]
     except Exception as error:
         return _visual_failure_result(
             source_path,
@@ -305,6 +330,54 @@ def _warnings_from_markdown(markdown: str) -> list[dict]:
             "message": " ".join(dict.fromkeys(warning_lines)),
         }
     ]
+
+
+def _pptx_semantic_warnings(source_path: Path, content_type: str) -> list[dict]:
+    if _media_type(content_type) != (
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    ) and source_path.suffix.lower() != ".pptx":
+        return []
+    warnings = [
+        {
+            "severity": "warning",
+            "code": "pptx_shape_outside_slide",
+            "message": (
+                f"Excluded fully off-canvas shape {shape.shape_name!r} from "
+                f"native slide {shape.native_slide_index} visible semantics"
+            ),
+            "source_ref": {
+                "type": "pptx_slide",
+                "source_slide_identity": shape.source_slide_identity,
+                "native_slide_index": shape.native_slide_index,
+                "shape_name": shape.shape_name,
+            },
+        }
+        for shape in inspect_off_canvas_shapes(source_path)
+    ]
+    presentation = Presentation(source_path)
+    for native_slide_index, slide in enumerate(presentation.slides, 1):
+        for field in dynamic_fields_for_slide(slide):
+            warnings.append(
+                {
+                    "severity": "warning",
+                    "code": "pptx_dynamic_field_cached_value",
+                    "message": (
+                        f"Excluded non-authoritative cached value for dynamic "
+                        f"field {field.field_type!r} on native slide "
+                        f"{native_slide_index}"
+                    ),
+                    "source_ref": {
+                        "type": "pptx_slide",
+                        "source_slide_identity": f"pptx-slide-{slide.slide_id}",
+                        "native_slide_index": native_slide_index,
+                        "shape_name": field.shape_name,
+                    },
+                    "field_type": field.field_type,
+                    "cached_value": field.cached_value,
+                    "cached_value_authority": "non_authoritative",
+                }
+            )
+    return warnings
 
 
 def _elapsed_ms(started_at: float) -> float:

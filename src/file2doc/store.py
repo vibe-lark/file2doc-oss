@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import mimetypes
+import re
 import secrets
 import shutil
 import sqlite3
@@ -14,6 +15,11 @@ from pathlib import Path
 from fastapi import HTTPException
 
 from file2doc.audio import AudioParseFailure, AudioParseOptions, parse_audio_transcript
+from file2doc.office_rendering import (
+    OfficeRenderError,
+    is_pptx_source,
+    render_pptx_visual_assets,
+)
 from file2doc.parsers import ParseFailure, ParseOptions, parse_content_markdown
 from file2doc.rendering import (
     AGENT_PAGE_IMAGE_DPI,
@@ -32,6 +38,7 @@ from file2doc_markitdown_visual.plugin import (
 
 SCHEMA_VERSION = "file2doc.parse-result.v1"
 VideoFrameExtractor = Callable[..., dict]
+OfficePageRenderer = Callable[..., tuple[list[dict], list[dict], dict[str, dict]]]
 
 
 class JobStore:
@@ -42,11 +49,13 @@ class JobStore:
         audio_parse_options: AudioParseOptions | None = None,
         parse_options: ParseOptions | None = None,
         video_frame_extractor: VideoFrameExtractor | None = None,
+        office_page_renderer: OfficePageRenderer | None = None,
     ) -> None:
         self.storage_root = storage_root
         self.audio_parse_options = audio_parse_options
         self.parse_options = parse_options
         self.video_frame_extractor = video_frame_extractor or extract_video_frames
+        self.office_page_renderer = office_page_renderer or render_pptx_visual_assets
         self.jobs_root = storage_root / "jobs"
         self.jobs_root.mkdir(parents=True, exist_ok=True)
         self.database_path = storage_root / "file2doc.sqlite3"
@@ -149,6 +158,7 @@ class JobStore:
         page_index: list[dict] = []
         media_index: list[dict] = []
         source_is_pdf = is_pdf_source(source_path, job["source"]["content_type"])
+        source_is_pptx = is_pptx_source(source_path, job["source"]["content_type"])
         if source_is_pdf:
             page_index, media_index, visual_artifacts = render_pdf_visual_assets(
                 source_path,
@@ -160,11 +170,29 @@ class JobStore:
                 ),
             )
             artifacts.update(visual_artifacts)
+        elif source_is_pptx:
+            try:
+                page_index, media_index, visual_artifacts = (
+                    self.office_page_renderer(
+                        source_path,
+                        result_root,
+                        new_artifact_id=lambda: _id("art"),
+                    )
+                )
+            except OfficeRenderError as error:
+                self._fail_job(job, error.code, str(error))
+                return
+            artifacts.update(visual_artifacts)
+            content_path.write_text(
+                _bind_pptx_markdown_to_source_units(parsed.markdown, page_index),
+                encoding="utf-8",
+            )
 
         visual_media, visual_result_artifacts = self._write_visual_results(
             parsed,
             result_root=result_root,
             publish_source_media=not source_is_pdf,
+            source_units=page_index if source_is_pptx else None,
         )
         media_index.extend(visual_media)
         artifacts.update(visual_result_artifacts)
@@ -224,6 +252,7 @@ class JobStore:
         *,
         result_root: Path,
         publish_source_media: bool,
+        source_units: list[dict] | None = None,
     ) -> tuple[list[dict], dict[str, dict]]:
         if not publish_source_media:
             return [], {}
@@ -232,6 +261,10 @@ class JobStore:
         results_by_ref = {result.source_ref: result for result in parsed.visual_results}
 
         for source in parsed.visual_sources:
+            occurrence_refs = [
+                _document_position_source_ref(location, source_units)
+                for location in (source.locations or ("unknown document position",))
+            ]
             extension = ".jpg" if source.media_type in {"image/jpeg", "image/jpg"} else ".png"
             image_path = Path(f"images/visual/{source.content_sha256}{extension}")
             absolute_image_path = result_root / image_path
@@ -243,6 +276,7 @@ class JobStore:
                 "kind": "visual_source_image",
                 "path": image_path.as_posix(),
                 "media_type": source.media_type,
+                "source_units": occurrence_refs,
                 "sha256": source.content_sha256,
             }
             artifacts[image_artifact_id] = image_artifact
@@ -253,7 +287,7 @@ class JobStore:
             if result is not None:
                 result_artifact_id = _id("art")
                 result_path = Path(f"visual/{source.content_sha256}.json")
-                payload = _visual_result_payload(result)
+                payload = _visual_result_payload(result, source_units=occurrence_refs)
                 self._write_json(result_root / result_path, payload)
                 artifacts[result_artifact_id] = {
                     "artifact_id": result_artifact_id,
@@ -261,11 +295,17 @@ class JobStore:
                     "path": result_path.as_posix(),
                     "media_type": "application/json; charset=utf-8",
                     "source_ref": source.source_ref,
+                    "source_units": occurrence_refs,
                     "sha256": source.content_sha256,
                 }
 
-            locations = source.locations or ("unknown document position",)
-            for occurrence, location in enumerate(locations, 1):
+            for occurrence, (location, occurrence_ref) in enumerate(
+                zip(
+                    source.locations or ("unknown document position",),
+                    occurrence_refs,
+                ),
+                1,
+            ):
                 base_media_id = f"visual-item-{source.content_sha256[:16]}"
                 media_id = (
                     base_media_id
@@ -279,10 +319,7 @@ class JobStore:
                         "path": image_path.as_posix(),
                         "artifact_id": image_artifact_id,
                         "media_type": source.media_type,
-                        "source_ref": {
-                            "type": "document_position",
-                            "location": location,
-                        },
+                        "source_ref": occurrence_ref,
                         "visual_parse_status": (
                             "completed" if result is not None else "warning"
                         ),
@@ -897,13 +934,14 @@ def _id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_urlsafe(12)}"
 
 
-def _visual_result_payload(result) -> dict:
+def _visual_result_payload(result, *, source_units: list[dict] | None = None) -> dict:
     return {
         "schema_version": VISUAL_RESULT_SCHEMA_VERSION,
         "prompt_version": VISUAL_PROMPT_VERSION,
         "source_ref": result.source_ref,
         "content_sha256": result.content_sha256,
         "locations": list(result.locations),
+        "source_units": list(source_units or []),
         "description": result.description,
         "visible_text": list(result.visible_text),
         "layout": result.layout,
@@ -922,6 +960,57 @@ def _visual_result_payload(result) -> dict:
             for audit in result.image_process_audits
         ],
     }
+
+
+def _document_position_source_ref(
+    location: str,
+    source_units: list[dict] | None,
+) -> dict:
+    match = re.match(r"^PPTX slide (\d+),", location)
+    if match and source_units:
+        native_slide_index = int(match.group(1))
+        source_unit = next(
+            (
+                item
+                for item in source_units
+                if item.get("native_slide_index") == native_slide_index
+            ),
+            None,
+        )
+        if source_unit is not None:
+            return {
+                "type": "pptx_slide",
+                "source_slide_identity": source_unit["source_slide_identity"],
+                "native_slide_index": native_slide_index,
+                "hidden": source_unit["hidden"],
+                "rendered_page_index": source_unit["rendered_page_index"],
+                "location": location,
+            }
+    return {"type": "document_position", "location": location}
+
+
+def _bind_pptx_markdown_to_source_units(
+    markdown: str,
+    source_units: list[dict],
+) -> str:
+    by_index = {item["native_slide_index"]: item for item in source_units}
+
+    def replacement(match: re.Match[str]) -> str:
+        native_slide_index = int(match.group(1))
+        source_unit = by_index.get(native_slide_index)
+        if source_unit is None:
+            return match.group(0)
+        rendered_page_index = source_unit["rendered_page_index"]
+        rendered = "null" if rendered_page_index is None else str(rendered_page_index)
+        hidden = str(source_unit["hidden"]).lower()
+        return (
+            "<!-- Source slide identity: "
+            f"{source_unit['source_slide_identity']}; "
+            f"native_slide_index: {native_slide_index}; "
+            f"hidden: {hidden}; rendered_page_index: {rendered} -->"
+        )
+
+    return re.sub(r"<!-- Slide number: (\d+) -->", replacement, markdown)
 
 
 def _now() -> datetime:

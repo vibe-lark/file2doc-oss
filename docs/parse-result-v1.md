@@ -507,6 +507,42 @@ Pages link source page understanding to media and OCR layers.
 
 If MarkItDown cannot produce text for a page but rendering succeeds, use `parse_status = "visual_only"` and attach a warning.
 
+For PPTX, `page_index` covers native slides rather than only rendered pages.
+Every representation uses the same stable Source slide identity:
+
+```json
+{
+  "source_slide_identity": "pptx-slide-521",
+  "source_unit": "slide",
+  "source_unit_index": 14,
+  "native_slide_index": 14,
+  "hidden": false,
+  "rendered_page_index": 14,
+  "render_binding": {
+    "status": "verified",
+    "method": "instrumented_render_marker"
+  },
+  "parse_status": "parsed",
+  "page_image_id": "pptx-slide-521-image",
+  "thumbnail_id": "pptx-slide-521-thumb"
+}
+```
+
+`source_slide_identity` is based on the OOXML slide ID, so reordering a deck
+does not silently change the identity. `native_slide_index` records current
+presentation order. Hidden slides have `hidden=true`, a null
+`rendered_page_index`, and no complete rendered asset. File2Doc verifies the
+render binding through an instrumented diagnostic render before publishing the
+clean Page Image; missing, duplicated, or inconsistent markers fail the Parse
+Job with `pptx_slide_binding_unprovable`.
+
+PPTX dynamic fields may contain a cached OOXML value different from the value
+evaluated by the renderer. Such fields are represented under `dynamic_fields`
+with separate `cached_value` and `evaluated_value` properties. Cached values
+are `non_authoritative` and are excluded from Content Markdown. Consumers use
+`authoritative_representation`, which points to `evaluated_value` when it can be
+read from the canonical render and otherwise to the complete Page Image.
+
 ## OCR Layer
 
 Legacy OCR layers remain page-level compatibility assets. Pixel-level

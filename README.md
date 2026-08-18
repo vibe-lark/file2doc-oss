@@ -7,7 +7,7 @@ The v1 direction is documented in:
 - `CONTEXT.md`
 - `docs/parse-result-v1.md`
 - `docs/implementation-plan.md`
-- `docs/api-examples.md`
+- `references/api-examples.md`
 - `SKILL.md`
 - `docs/adr/`
 

@@ -20,9 +20,9 @@ def test_agent_api_docs_preserve_result_retrieval_contract() -> None:
     assert '"artifacts": [' in api_examples
     assert '"artifacts": {' not in api_examples
     assert "empty_result" in combined
-    assert "npx skills add vibe-lark/file2doc-skill --skill file2doc-http" in skill_guide
-    assert "npx skills update file2doc-http" in skill_guide
-    assert 'version: "0.1.27"' in skill_guide
+    assert "agentbuddy@latest skill add vibe-lark/file2doc-skill" in skill_guide
+    assert "agentbuddy@latest update file2doc-http" in skill_guide
+    assert 'version: "0.1.30"' in skill_guide
     assert "/skills/file2doc-http/version.json" in skill_guide
     assert "X-File2Doc-Skill-Version" in skill_guide
     assert "vibe-lark/file2doc-skill" in skill_guide

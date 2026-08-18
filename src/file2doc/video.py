@@ -338,7 +338,7 @@ def _is_near_duplicate(
 
 
 def _average_hash(image: Image.Image) -> int:
-    pixels = list(image.convert("L").resize((8, 8)).get_flattened_data())
+    pixels = list(image.convert("L").resize((8, 8)).getdata())
     average = sum(pixels) / len(pixels)
     value = 0
     for pixel in pixels:
