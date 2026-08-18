@@ -23,6 +23,12 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
 from .embedded import EmbeddedVisualParser, render_embedded_visual
+from .pptx_semantics import (
+    PptxCoordinateTransform,
+    group_child_transform,
+    shape_intersects_slide,
+    shape_text_without_dynamic_fields,
+)
 
 
 _DOCX_MIME_TYPE = (
@@ -109,7 +115,7 @@ def _replace_docx_images_with_placeholders(
 class VisualPptxConverter(PptxConverter):
     """Preserve MarkItDown's slide/shape conversion and parse every picture."""
 
-    def __init__(self, *, visual_parser: EmbeddedVisualParser) -> None:
+    def __init__(self, *, visual_parser: EmbeddedVisualParser | None) -> None:
         super().__init__()
         self._visual_parser = visual_parser
 
@@ -129,7 +135,11 @@ class VisualPptxConverter(PptxConverter):
         stream_info: StreamInfo,
         **kwargs: Any,
     ) -> DocumentConverterResult:
-        visual_session = self._visual_parser.new_session()
+        visual_session = (
+            self._visual_parser.new_session()
+            if self._visual_parser is not None
+            else None
+        )
         presentation = pptx.Presentation(file_stream)
         output: list[str] = []
         visual_warnings: list[str] = []
@@ -138,8 +148,15 @@ class VisualPptxConverter(PptxConverter):
             output.extend(["", f"<!-- Slide number: {slide_number} -->"])
             title = slide.shapes.title
 
-            def append_shape(shape) -> None:
-                if self._is_picture(shape):
+            def append_shape(shape, transform: PptxCoordinateTransform) -> None:
+                if not shape_intersects_slide(
+                    shape,
+                    slide_width=presentation.slide_width,
+                    slide_height=presentation.slide_height,
+                    transform=transform,
+                ):
+                    return
+                if self._is_picture(shape) and visual_session is not None:
                     result = visual_session.parse(
                         shape.image.blob,
                         content_type=shape.image.content_type,
@@ -158,15 +175,18 @@ class VisualPptxConverter(PptxConverter):
                 if shape.has_chart:
                     output.append(self._convert_chart_to_markdown(shape.chart).strip())
                 elif shape.has_text_frame:
-                    text = shape.text.lstrip() if shape == title else shape.text
-                    output.append(f"# {text}" if shape == title else text)
+                    text = shape_text_without_dynamic_fields(shape)
+                    text = text.lstrip() if shape == title else text
+                    if text.strip():
+                        output.append(f"# {text}" if shape == title else text)
 
                 if shape.shape_type == pptx.enum.shapes.MSO_SHAPE_TYPE.GROUP:
+                    child_transform = group_child_transform(shape, parent=transform)
                     for child in sorted(shape.shapes, key=attrgetter("top", "left")):
-                        append_shape(child)
+                        append_shape(child, child_transform)
 
             for shape in sorted(slide.shapes, key=attrgetter("top", "left")):
-                append_shape(shape)
+                append_shape(shape, PptxCoordinateTransform())
 
             if slide.has_notes_slide:
                 notes_frame = slide.notes_slide.notes_text_frame
@@ -177,6 +197,13 @@ class VisualPptxConverter(PptxConverter):
         return DocumentConverterResult(
             markdown=_append_visual_warnings(markdown, visual_warnings)
         )
+
+
+class NativePptxConverter(VisualPptxConverter):
+    """File2Doc PPTX conversion without a remote Visual Provider."""
+
+    def __init__(self) -> None:
+        super().__init__(visual_parser=None)
 
 
 class VisualXlsxConverter(HtmlConverter):

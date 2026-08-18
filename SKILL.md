@@ -1,8 +1,8 @@
 ---
 name: file2doc-http
-description: Parse offline files with the File2Doc HTTP API and retrieve Markdown, manifest, media artifacts, transcripts, and video frames. Use when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
+description: Parses offline files with the File2Doc HTTP API and retrieves Markdown, manifests, media artifacts, transcripts, and video frames. Triggers when the user provides local PDFs, Office files, audio, or video and wants agent-readable document content or artifacts.
 metadata:
-  version: "0.1.28"
+  version: "0.1.30"
 ---
 
 # File2Doc HTTP
@@ -14,7 +14,7 @@ the local file bytes.
 
 ```bash
 BASE_URL=${BASE_URL:-https://file2doc.solutionsuite.cn}
-SKILL_VERSION=0.1.28
+SKILL_VERSION=0.1.30
 
 curl -fsS "$BASE_URL/skills/file2doc-http/version.json?installed_version=$SKILL_VERSION"
 
@@ -27,7 +27,7 @@ curl -sS -X POST "$BASE_URL/parse-jobs/upload" \
 
 For production, do not ask users for `FILE2DOC_BEARER_TOKEN`. The public
 gateway injects the internal bearer token before proxying to the private
-File2Doc service. For local development, set `BASE_URL=http://127.0.0.1:8000`;
+File2Doc service. For local development, set `BASE_URL=http://localhost:8000`;
 only include `Authorization: Bearer ...` when the local service is explicitly
 started with auth enabled.
 
@@ -37,7 +37,7 @@ started with auth enabled.
    `update_required` is true, show the supplied update command and stop. If only
    `update_available` is true, mention it without blocking the task.
 2. Upload with `POST /parse-jobs/upload` and send
-   `X-File2Doc-Skill-Version: 0.1.28` on upload, status, and result requests.
+   `X-File2Doc-Skill-Version: 0.1.30` on upload, status, and result requests.
 3. Poll `GET /parse-jobs/{job_id}` until `completed`,
    `completed_with_warnings`, or `failed`.
 4. If failed, read `error.code` and stop result retrieval because no package
@@ -48,9 +48,12 @@ started with auth enabled.
    `GET /parse-jobs/{job_id}/artifacts/{artifact_id}`.
 8. For media, choose items from `media_index` and download each item's
    `artifact_id` through the same artifact endpoint.
-9. For PDF sources, use complete `page_image` media and the page OCR sidecar,
-   which combines native text with VLM semantics for unresolved visual regions.
-   For Office embedded images, read `visual_result_artifact_id` when present.
+9. For PDF and PPTX sources, use complete `page_image` media. PPTX consumers
+   must join native text, Visual Items, Visual Parse Results, and rendered assets
+   only through `source_slide_identity`; never infer a page association from
+   ordinal similarity. For PDF sources, the page OCR sidecar combines native
+   text with VLM semantics for unresolved visual regions. For Office embedded
+   images, read `visual_result_artifact_id` when present.
 10. Use `GET /parse-jobs/{job_id}/package` only for full zip export or debugging.
 
 ## Final Document
@@ -134,6 +137,14 @@ Trust the manifest over guessed paths.
 - Office visual media keep the original bytes in `artifact_id` and link the structured
   `description`, `visible_text`, `layout`, and `warnings` JSON through
   `visual_result_artifact_id`.
+- PPTX `page_index` entries expose `source_slide_identity`,
+  `native_slide_index`, `hidden`, and nullable `rendered_page_index`. A hidden
+  slide has no Page Image. Published rendered pages carry a verified
+  `render_binding`; a job fails with `pptx_slide_binding_unprovable` when the
+  binding cannot be proven.
+- PPTX dynamic fields keep cached and renderer-evaluated values separate. Treat
+  `cached_value_authority: non_authoritative` as diagnostic evidence only and
+  use the representation named by `authoritative_representation`.
 - `timeline` contains video frame time anchors.
 - `transcript.segments` is the structured ASR output for audio and video.
 - Empty parser, Visual Parsing, or ASR output is a completed result with empty artifacts
@@ -149,8 +160,9 @@ Trust the manifest over guessed paths.
   parsed natively; VLM semantics are added only for unresolved visual regions or
   scanned pages and are exposed through the page OCR sidecar.
 - Office: use Markdown plus embedded image media and linked Visual Parse Result
-  artifacts. Visual results contain description, visible text, layout, and
-  uncertainty warnings.
+  artifacts. PPTX also provides complete rendered Page Images with stable
+  Source slide identities. Visual results contain description, visible text, layout,
+  and uncertainty warnings.
 - Audio: use Markdown plus `transcript` artifacts.
 - Video: use transcript, `timeline`, and selected `video_frame` artifacts.
   Frame extraction scans time coverage and scene changes, filters low-information
@@ -159,10 +171,10 @@ Trust the manifest over guessed paths.
 
 ## Install And Update
 
-Install from the repository so the skills manager can update it:
+Install from the repository so AgentBuddy can update it:
 
 ```bash
-npx skills add vibe-lark/file2doc-skill --skill file2doc-http
+npm_config_registry="https://bnpm.byted.org" npx -y agentbuddy@latest skill add vibe-lark/file2doc-skill --skill file2doc-http
 ```
 
 For mainland or sandbox environments that cannot reach GitHub, install from the
@@ -172,19 +184,21 @@ File2Doc public gateway:
 curl -fsSL https://file2doc.solutionsuite.cn/skills/file2doc-http.tar.gz -o /tmp/file2doc-http.tar.gz
 mkdir -p /tmp/file2doc-skill
 tar -xzf /tmp/file2doc-http.tar.gz -C /tmp/file2doc-skill
-npx skills add /tmp/file2doc-skill --skill file2doc-http --copy -y
+npm_config_registry="https://bnpm.byted.org" npx -y agentbuddy@latest skill add /tmp/file2doc-skill --skill file2doc-http --copy -y
 ```
 
-Or use the hosted installer:
+Or download, inspect, and then run the hosted installer:
 
 ```bash
-curl -fsSL https://file2doc.solutionsuite.cn/skills/file2doc-http/install.sh | sh
+curl -fsSL https://file2doc.solutionsuite.cn/skills/file2doc-http/install.sh -o /tmp/file2doc-install.sh
+less /tmp/file2doc-install.sh
+sh /tmp/file2doc-install.sh
 ```
 
 Update an installed copy from GitHub:
 
 ```bash
-npx skills update file2doc-http
+npm_config_registry="https://bnpm.byted.org" npx -y agentbuddy@latest update file2doc-http
 ```
 
 For gateway-installed copies, update by re-running the gateway install command.
@@ -192,4 +206,4 @@ For gateway-installed copies, update by re-running the gateway install command.
 ## Reference
 
 For full request examples, response shapes, and package retrieval details, see
-`docs/api-examples.md`.
+`references/api-examples.md`.

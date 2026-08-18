@@ -39,6 +39,7 @@ def create_app(
     audio_parse_options: AudioParseOptions | None = None,
     parse_options: ParseOptions | None = None,
     video_frame_extractor=None,
+    office_page_renderer=None,
     store=None,
     execute_jobs_in_process: bool = True,
 ) -> FastAPI:
@@ -50,6 +51,7 @@ def create_app(
             audio_parse_options=audio_parse_options,
             parse_options=capability_parse_options,
             video_frame_extractor=video_frame_extractor,
+            office_page_renderer=office_page_renderer,
         )
     app = FastAPI(
         title="File2Doc",
@@ -123,6 +125,7 @@ def create_app(
                     asr_engine,
                 ),
                 "ffmpeg_available": _ffmpeg_available(),
+                "office_renderer_available": _office_renderer_available(),
                 "visual_parsing_configured": (
                     capability_parse_options.visual_configured
                 ),
@@ -149,6 +152,7 @@ def create_app(
             "transcript_segments_supported": True,
             "transcript_timestamps_supported": asr_engine == "funasr-local",
             "ffmpeg_available": _ffmpeg_available(),
+            "office_renderer_available": _office_renderer_available(),
             "visual_parsing_configured": capability_parse_options.visual_configured,
             "visual_provider": "ark-responses",
             "visual_model": capability_parse_options.visual_model,
@@ -416,6 +420,10 @@ def _ffmpeg_available() -> bool:
         return bool(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception:
         return False
+
+
+def _office_renderer_available() -> bool:
+    return bool(shutil.which("libreoffice"))
 
 
 def _configured_max_upload_size_mb() -> int | None:

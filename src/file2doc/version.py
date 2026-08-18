@@ -4,19 +4,25 @@ import re
 from typing import Any
 
 
-SERVICE_VERSION = "0.1.28"
+SERVICE_VERSION = "0.1.30"
 SKILL_NAME = "file2doc-http"
-SKILL_VERSION = "0.1.28"
+SKILL_VERSION = "0.1.30"
 MINIMUM_COMPATIBLE_SKILL_VERSION = "0.1.18"
 SKILL_VERSION_URL = (
     "https://file2doc.solutionsuite.cn/skills/file2doc-http/version.json"
 )
 GATEWAY_UPDATE_COMMAND = (
-    "curl -fsSL https://file2doc.solutionsuite.cn/skills/file2doc-http/install.sh | sh"
+    "curl -fsSL https://file2doc.solutionsuite.cn/skills/file2doc-http/install.sh "
+    "-o /tmp/file2doc-install.sh"
 )
-GITHUB_UPDATE_COMMAND = "npx skills update file2doc-http"
+GITHUB_UPDATE_COMMAND = (
+    'npm_config_registry="https://bnpm.byted.org" '
+    "npx -y agentbuddy@latest update file2doc-http"
+)
 GITHUB_INSTALL_COMMAND = (
-    "npx skills add vibe-lark/file2doc-skill --skill file2doc-http"
+    'npm_config_registry="https://bnpm.byted.org" '
+    "npx -y agentbuddy@latest skill add vibe-lark/file2doc-skill "
+    "--skill file2doc-http"
 )
 
 _SEMVER_PATTERN = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")

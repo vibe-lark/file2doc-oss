@@ -1,10 +1,11 @@
 [project]
 name = "file2doc"
-version = "0.1.28"
+version = "0.1.30"
 description = "HTTP-first offline file parsing service for agent-friendly result packages."
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.111",
+  "httpx>=0.27",
   "imageio-ffmpeg>=0.5",
   "mammoth>=1.9",
   "markitdown[pdf,pptx,docx,xlsx]>=0.1.2",
